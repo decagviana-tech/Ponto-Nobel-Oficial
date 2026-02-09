@@ -9,7 +9,7 @@ export enum WeekDay {
   SATURDAY = 6
 }
 
-export type EntryType = 'WORK' | 'MEDICAL' | 'HOLIDAY' | 'ADJUSTMENT' | 'PAYMENT' | 'VACATION';
+export type EntryType = 'WORK' | 'MEDICAL' | 'HOLIDAY' | 'ADJUSTMENT' | 'PAYMENT' | 'VACATION' | 'BONUS' | 'OFF_DAY' | 'WORK_RETRO';
 
 export interface Employee {
   id: string;
@@ -21,7 +21,7 @@ export interface Employee {
   isActive: boolean;
   startDate: string;
   initialBalanceMinutes: number;
-  isHourly?: boolean; // Se true, não tem carga horária esperada
+  isHourly?: boolean;
 }
 
 export interface ClockRecord {
