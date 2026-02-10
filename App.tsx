@@ -116,6 +116,9 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  /**
+   * CÁLCULO DE SALDO ACUMULADO OTIMIZADO
+   */
   const getCumulativeBalance = (empId: string) => {
     const emp = data.employees.find(e => e.id === empId);
     if (!emp) return 0;
@@ -125,9 +128,9 @@ const App: React.FC = () => {
     if (startDateStr.includes('T')) startDateStr = startDateStr.split('T')[0];
     
     let loopDate = new Date(startDateStr + "T12:00:00");
-    const today = new Date(currentTime);
-    today.setHours(0,0,0,0);
+    const todayStr = getLocalDateString(currentTime);
     
+    // Mapeia todas as entradas para acesso rápido
     const entriesMap = new Map<string, TimeBankEntry[]>();
     data.timeBank.filter(t => t.employeeId === empId).forEach(t => {
       const list = entriesMap.get(t.date) || [];
@@ -135,45 +138,51 @@ const App: React.FC = () => {
       entriesMap.set(t.date, list);
     });
 
-    const yesterday = new Date(today);
+    // Percorre do startDate até ONTEM
+    let maxSafety = 0; 
+    const yesterday = new Date(currentTime);
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = getLocalDateString(yesterday);
 
-    let maxSafety = 0; 
-    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 3650) { // Até 10 anos de segurança
+    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 4000) {
       maxSafety++;
       const dateKey = getLocalDateString(loopDate);
       const dayEntries = entriesMap.get(dateKey) || [];
       const metaDoDia = getExpectedMinutesForDate(emp, loopDate);
       
-      if (dayEntries.length > 0) {
-        dayEntries.forEach(ent => {
-          // Tipos que afetam positivamente ou negativamente o saldo
-          if (['WORK', 'WORK_RETRO', 'ADJUSTMENT', 'BONUS', 'MEDICAL', 'HOLIDAY', 'VACATION', 'OFF_DAY'].includes(ent.type)) {
-            totalBalance += ent.minutes;
-          }
-        });
-      } else {
-        if (!emp.isHourly && metaDoDia > 0) {
-          totalBalance -= metaDoDia;
-        }
+      const workEntry = dayEntries.find(e => e.type === 'WORK');
+      const otherEntries = dayEntries.filter(e => e.type !== 'WORK');
+      const isExcused = otherEntries.some(e => ['MEDICAL', 'HOLIDAY', 'VACATION', 'OFF_DAY'].includes(e.type));
+
+      if (workEntry) {
+        // Se houve ponto, o saldo do dia já está calculado (trabalhado - meta)
+        totalBalance += workEntry.minutes;
+      } else if (metaDoDia > 0 && !isExcused) {
+        // Dia de trabalho sem ponto e sem abono: gera débito da meta
+        totalBalance -= metaDoDia;
       }
+
+      // Soma ajustes manuais, bônus e trabalho retroativo (que são acréscimos diretos ao saldo)
+      otherEntries.forEach(ent => {
+        if (['ADJUSTMENT', 'WORK_RETRO', 'BONUS'].includes(ent.type)) {
+          totalBalance += ent.minutes;
+        }
+      });
+
       loopDate.setDate(loopDate.getDate() + 1);
     }
 
-    // Lógica para o dia de hoje
-    const todayStr = getLocalDateString(currentTime);
+    // Processa o dia de HOJE em tempo real
     const todayRec = data.records.find(r => r.employeeId === empId && r.date === todayStr);
     const todayManualEntries = entriesMap.get(todayStr) || [];
 
-    if (todayManualEntries.length > 0) {
-      todayManualEntries.forEach(ent => {
-        if (['WORK', 'WORK_RETRO', 'ADJUSTMENT'].includes(ent.type)) totalBalance += ent.minutes;
-      });
-    } else if (todayRec) {
+    if (todayRec) {
       const workedSoFar = calculateWorkedMinutes(todayRec, currentTime);
       totalBalance += (workedSoFar - todayRec.expectedMinutes);
     }
+    todayManualEntries.forEach(ent => {
+      if (['ADJUSTMENT', 'WORK_RETRO', 'BONUS'].includes(ent.type)) totalBalance += ent.minutes;
+    });
 
     return totalBalance;
   };
@@ -219,22 +228,15 @@ const App: React.FC = () => {
 
   const handleDeleteFullRecord = async (recordId: string, employeeId: string, date: string) => {
     if (!supabase) return;
-    if (confirm(`Atenção: Você está apagando o registro do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}. Confirmar?`)) {
+    if (confirm(`Excluir batidas do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}?`)) {
       setIsSaving(true);
       try {
-        // Apagar do banco de horas primeiro usando o critério correto
         await supabase.from('timeBank').delete().match({ employeeId, date, type: 'WORK' });
-        // Depois apagar o registro físico
         const { error } = await supabase.from('records').delete().eq('id', recordId);
         if (error) throw error;
-        
         await fetchData();
-        alert("Ponto excluído com sucesso!");
-      } catch (err: any) {
-        alert("Erro ao excluir: " + err.message);
-      } finally {
-        setIsSaving(false);
-      }
+        alert("Ponto excluído!");
+      } catch (err: any) { alert("Erro: " + err.message); } finally { setIsSaving(false); }
     }
   };
 
@@ -245,11 +247,9 @@ const App: React.FC = () => {
     try {
       const emp = data.employees.find(e => e.id === adjustmentForm.employeeId);
       if (!emp) return;
-      
       const baseMinutes = parseTimeStringToMinutes(adjustmentForm.amountStr);
       const finalMinutes = adjustmentForm.isPositive ? Math.abs(baseMinutes) : -Math.abs(baseMinutes);
       
-      // Salva no banco usando camelCase
       const { error } = await supabase.from('timeBank').insert([{
         employeeId: adjustmentForm.employeeId,
         date: adjustmentForm.date,
@@ -259,15 +259,10 @@ const App: React.FC = () => {
       }]);
       
       if (error) throw error;
-      
-      setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00', employeeId: '' });
+      setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00' });
       await fetchData();
       alert("Ajuste aplicado com sucesso!");
-    } catch (err: any) { 
-      alert("Erro ao salvar ajuste: " + err.message); 
-    } finally { 
-      setIsSaving(false); 
-    }
+    } catch (err: any) { alert("Erro: " + err.message); } finally { setIsSaving(false); }
   };
 
   const handleSaveJustification = async (e: React.FormEvent) => {
@@ -283,10 +278,9 @@ const App: React.FC = () => {
         note: justificationForm.note
       }]);
       if (error) throw error;
-      setJustificationForm({ ...justificationForm, note: '', employeeId: '' });
       await fetchData();
       alert("Abono registrado!");
-    } catch (err: any) { alert("Erro ao salvar: " + err.message); } finally { setIsSaving(false); }
+    } catch (err: any) { alert("Erro: " + err.message); } finally { setIsSaving(false); }
   };
 
   const handleDeleteEntry = async (id: string, message: string) => {
@@ -306,14 +300,10 @@ const App: React.FC = () => {
         'Funcionário': emp?.name || '---',
         'Data': new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR'),
         'Entrada': formatTime(r.clockIn),
-        'I.Almoço': formatTime(r.lunchStart),
-        'R.Almoço': formatTime(r.lunchEnd),
-        'Saída': formatTime(r.clockOut),
-        'Saldo do Dia': tbe ? formatMinutes(tbe.minutes) : '---',
-        'Tipo': ENTRY_TYPE_LABELS[r.type] || 'Trabalho'
+        'Saldo do Dia': tbe ? formatMinutes(tbe.minutes) : '---'
       };
     });
-    exportToCSV(mapped, 'Folha_Ponto_Nobel');
+    exportToCSV(mapped, 'Relatorio_Nobel');
   };
 
   const filteredRecords = data.records.filter(r => {
@@ -349,13 +339,12 @@ const App: React.FC = () => {
     }
   };
 
-  // Função robusta para formatar a data de início
   const safeFormatDate = (dateStr: string | null | undefined) => {
     if (!dateStr) return "N/A";
     const cleanDate = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
-    const d = new Date(cleanDate + "T12:00:00");
-    if (isNaN(d.getTime())) return "Data Inválida";
-    return d.toLocaleDateString('pt-BR');
+    const parts = cleanDate.split('-');
+    if (parts.length !== 3) return cleanDate;
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
   };
 
   return (
@@ -485,7 +474,6 @@ const App: React.FC = () => {
                       e.preventDefault();
                       if(!supabase) return;
                       setIsSaving(true);
-                      
                       const payload = {
                         name: newEmp.name, 
                         role: newEmp.role, 
@@ -495,23 +483,16 @@ const App: React.FC = () => {
                         initialBalanceMinutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), 
                         startDate: newEmp.startDate
                       };
-
                       try {
                         const { error } = editingEmployeeId 
                           ? await supabase.from('employees').update(payload).eq('id', editingEmployeeId)
                           : await supabase.from('employees').insert([payload]);
-
                         if (error) throw error;
-
-                        alert("Dados salvos com sucesso!");
+                        alert("Dados salvos!");
                         setEditingEmployeeId(null); 
                         setNewEmp({ name:'', role:'', dailyHours:'8', englishDay:'6', shortDayHours:'4', initialBalanceStr:'00:00', isHourly:false, startDate: DEFAULT_START_DATE }); 
                         await fetchData();
-                      } catch (err: any) {
-                        alert("ERRO NO BANCO: " + err.message);
-                      } finally {
-                        setIsSaving(false);
-                      }
+                      } catch (err: any) { alert("ERRO: " + err.message); } finally { setIsSaving(false); }
                     }} className="space-y-4">
                       <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Nome Completo"/>
                       <input required value={newEmp.role} onChange={e => setNewEmp({...newEmp, role:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Cargo"/>
@@ -625,38 +606,6 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {activeTab === 'reports' && (
-                <div className="space-y-6">
-                   <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
-                      <div className="flex-1 min-w-[200px]"><label className="text-[9px] font-black text-slate-400 uppercase ml-2">Filtrar Pessoa</label><select value={reportFilter.employeeId} onChange={e => setReportFilter({...reportFilter, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"><option value="all">Todos</option>{data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
-                      <div className="flex gap-2"><input type="date" value={reportFilter.startDate} onChange={e => setReportFilter({...reportFilter, startDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/><input type="date" value={reportFilter.endDate} onChange={e => setReportFilter({...reportFilter, endDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/></div>
-                      <button onClick={handleExportAccountantReport} className="p-4 bg-indigo-600 text-white rounded-xl shadow-lg font-black uppercase text-[10px] flex items-center gap-2"><Download size={16}/> Exportar CSV</button>
-                   </div>
-                   <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left text-xs font-bold">
-                          <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400"><tr><th className="px-6 py-4">Data</th><th className="px-6 py-4">Colaborador</th><th className="px-6 py-4 text-center">Horário E/S</th><th className="px-6 py-4 text-center">Saldo Diário</th><th className="px-6 py-4 text-center">Excluir</th></tr></thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {filteredRecords.map(r => {
-                              const emp = data.employees.find(e => e.id === r.employeeId);
-                              const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
-                              return (
-                                <tr key={r.id} className="text-slate-600 hover:bg-slate-50 transition-colors">
-                                  <td className="px-6 py-4 font-mono">{safeFormatDate(r.date)}</td>
-                                  <td className="px-6 py-4">{emp?.name || '---'}</td>
-                                  <td className="px-6 py-4 text-center font-mono">{formatTime(r.clockIn)} - {formatTime(r.clockOut)}</td>
-                                  <td className={`px-6 py-4 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{tbe ? formatMinutes(tbe.minutes) : '---'}</td>
-                                  <td className="px-6 py-4 text-center"><button onClick={() => handleDeleteFullRecord(r.id, r.employeeId, r.date)} className="p-2 text-rose-300 hover:text-rose-600"><Trash2 size={16}/></button></td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                   </div>
-                </div>
-              )}
-
               {activeTab === 'admin' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                   <div className="lg:col-span-5">
@@ -698,11 +647,40 @@ const App: React.FC = () => {
                             </div>
                           )
                        })}
-                       {data.timeBank.filter(t => ['WORK_RETRO', 'ADJUSTMENT', 'BONUS'].includes(t.type)).length === 0 && (
-                         <div className="text-center py-10 text-slate-400 text-xs font-bold italic">Nenhum ajuste manual encontrado.</div>
-                       )}
                     </div>
                   </div>
+                </div>
+              )}
+
+              {activeTab === 'reports' && (
+                <div className="space-y-6">
+                   <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
+                      <div className="flex-1 min-w-[200px]"><label className="text-[9px] font-black text-slate-400 uppercase ml-2">Filtrar Pessoa</label><select value={reportFilter.employeeId} onChange={e => setReportFilter({...reportFilter, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"><option value="all">Todos</option>{data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
+                      <div className="flex gap-2"><input type="date" value={reportFilter.startDate} onChange={e => setReportFilter({...reportFilter, startDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/><input type="date" value={reportFilter.endDate} onChange={e => setReportFilter({...reportFilter, endDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/></div>
+                      <button onClick={handleExportAccountantReport} className="p-4 bg-indigo-600 text-white rounded-xl shadow-lg font-black uppercase text-[10px] flex items-center gap-2"><Download size={16}/> Exportar CSV</button>
+                   </div>
+                   <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs font-bold">
+                          <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400"><tr><th className="px-6 py-4">Data</th><th className="px-6 py-4">Colaborador</th><th className="px-6 py-4 text-center">Horário E/S</th><th className="px-6 py-4 text-center">Saldo Diário</th><th className="px-6 py-4 text-center">Excluir</th></tr></thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {filteredRecords.map(r => {
+                              const emp = data.employees.find(e => e.id === r.employeeId);
+                              const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+                              return (
+                                <tr key={r.id} className="text-slate-600 hover:bg-slate-50 transition-colors">
+                                  <td className="px-6 py-4 font-mono">{safeFormatDate(r.date)}</td>
+                                  <td className="px-6 py-4">{emp?.name || '---'}</td>
+                                  <td className="px-6 py-4 text-center font-mono">{formatTime(r.clockIn)} - {formatTime(r.clockOut)}</td>
+                                  <td className={`px-6 py-4 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{tbe ? formatMinutes(tbe.minutes) : '---'}</td>
+                                  <td className="px-6 py-4 text-center"><button onClick={() => handleDeleteFullRecord(r.id, r.employeeId, r.date)} className="p-2 text-rose-300 hover:text-rose-600"><Trash2 size={16}/></button></td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                   </div>
                 </div>
               )}
 
