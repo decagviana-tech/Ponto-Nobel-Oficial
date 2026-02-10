@@ -116,9 +116,6 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  /**
-   * CÁLCULO DE SALDO ACUMULADO OTIMIZADO
-   */
   const getCumulativeBalance = (empId: string) => {
     const emp = data.employees.find(e => e.id === empId);
     if (!emp) return 0;
@@ -130,7 +127,6 @@ const App: React.FC = () => {
     let loopDate = new Date(startDateStr + "T12:00:00");
     const todayStr = getLocalDateString(currentTime);
     
-    // Mapeia todas as entradas para acesso rápido
     const entriesMap = new Map<string, TimeBankEntry[]>();
     data.timeBank.filter(t => t.employeeId === empId).forEach(t => {
       const list = entriesMap.get(t.date) || [];
@@ -138,7 +134,6 @@ const App: React.FC = () => {
       entriesMap.set(t.date, list);
     });
 
-    // Percorre do startDate até ONTEM
     let maxSafety = 0; 
     const yesterday = new Date(currentTime);
     yesterday.setDate(yesterday.getDate() - 1);
@@ -155,14 +150,11 @@ const App: React.FC = () => {
       const isExcused = otherEntries.some(e => ['MEDICAL', 'HOLIDAY', 'VACATION', 'OFF_DAY'].includes(e.type));
 
       if (workEntry) {
-        // Se houve ponto, o saldo do dia já está calculado (trabalhado - meta)
         totalBalance += workEntry.minutes;
       } else if (metaDoDia > 0 && !isExcused) {
-        // Dia de trabalho sem ponto e sem abono: gera débito da meta
         totalBalance -= metaDoDia;
       }
 
-      // Soma ajustes manuais, bônus e trabalho retroativo (que são acréscimos diretos ao saldo)
       otherEntries.forEach(ent => {
         if (['ADJUSTMENT', 'WORK_RETRO', 'BONUS'].includes(ent.type)) {
           totalBalance += ent.minutes;
@@ -172,7 +164,6 @@ const App: React.FC = () => {
       loopDate.setDate(loopDate.getDate() + 1);
     }
 
-    // Processa o dia de HOJE em tempo real
     const todayRec = data.records.find(r => r.employeeId === empId && r.date === todayStr);
     const todayManualEntries = entriesMap.get(todayStr) || [];
 
@@ -245,11 +236,8 @@ const App: React.FC = () => {
     if (!supabase || !adjustmentForm.employeeId) return;
     setIsSaving(true);
     try {
-      const emp = data.employees.find(e => e.id === adjustmentForm.employeeId);
-      if (!emp) return;
       const baseMinutes = parseTimeStringToMinutes(adjustmentForm.amountStr);
       const finalMinutes = adjustmentForm.isPositive ? Math.abs(baseMinutes) : -Math.abs(baseMinutes);
-      
       const { error } = await supabase.from('timeBank').insert([{
         employeeId: adjustmentForm.employeeId,
         date: adjustmentForm.date,
@@ -257,7 +245,6 @@ const App: React.FC = () => {
         type: adjustmentForm.type,
         note: 'Ajuste manual administrativo'
       }]);
-      
       if (error) throw error;
       setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00' });
       await fetchData();
@@ -468,64 +455,116 @@ const App: React.FC = () => {
 
               {activeTab === 'employees' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                  <div className="lg:col-span-4 bg-white p-8 rounded-[2.5rem] shadow-lg border border-slate-100">
-                    <h2 className="text-xl font-black font-serif italic mb-6">Perfil do Colaborador</h2>
+                  <div className="lg:col-span-5 bg-white p-8 rounded-[2.5rem] shadow-lg border border-slate-100">
+                    <h2 className="text-xl font-black font-serif italic mb-6">Cadastro / Edição de Colaborador</h2>
                     <form onSubmit={async (e) => {
                       e.preventDefault();
                       if(!supabase) return;
                       setIsSaving(true);
+                      
                       const payload = {
                         name: newEmp.name, 
                         role: newEmp.role, 
-                        baseDailyMinutes: parseInt(newEmp.dailyHours)*60,
+                        baseDailyMinutes: newEmp.isHourly ? 0 : parseInt(newEmp.dailyHours)*60,
                         englishWeekDay: parseInt(newEmp.englishDay), 
-                        englishWeekMinutes: parseInt(newEmp.shortDayHours)*60,
+                        englishWeekMinutes: newEmp.isHourly ? 0 : parseInt(newEmp.shortDayHours)*60,
                         initialBalanceMinutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), 
-                        startDate: newEmp.startDate
+                        startDate: newEmp.startDate,
+                        isHourly: newEmp.isHourly
                       };
+
                       try {
                         const { error } = editingEmployeeId 
                           ? await supabase.from('employees').update(payload).eq('id', editingEmployeeId)
                           : await supabase.from('employees').insert([payload]);
+
                         if (error) throw error;
-                        alert("Dados salvos!");
+
+                        alert("Dados salvos com sucesso!");
                         setEditingEmployeeId(null); 
                         setNewEmp({ name:'', role:'', dailyHours:'8', englishDay:'6', shortDayHours:'4', initialBalanceStr:'00:00', isHourly:false, startDate: DEFAULT_START_DATE }); 
                         await fetchData();
-                      } catch (err: any) { alert("ERRO: " + err.message); } finally { setIsSaving(false); }
+                      } catch (err: any) {
+                        alert("ERRO NO BANCO: " + err.message);
+                      } finally {
+                        setIsSaving(false);
+                      }
                     }} className="space-y-4">
-                      <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Nome Completo"/>
-                      <input required value={newEmp.role} onChange={e => setNewEmp({...newEmp, role:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Cargo"/>
-                      <div>
-                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Início do Cálculo</label>
-                        <input type="date" required value={newEmp.startDate} onChange={e => setNewEmp({...newEmp, startDate:e.target.value})} className="w-full p-4 rounded-xl bg-indigo-50 border-2 border-indigo-100 font-black text-indigo-700 text-sm"/>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Nome do Colaborador</label>
+                        <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Nome Completo"/>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
-                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Meta (h)</label>
-                          <input type="number" value={newEmp.dailyHours} onChange={e => setNewEmp({...newEmp, dailyHours:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm"/>
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Cargo / Função</label>
+                          <input required value={newEmp.role} onChange={e => setNewEmp({...newEmp, role:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Ex: Vendedor"/>
                         </div>
                         <div className="space-y-1">
-                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Folga fixa</label>
-                          <select value={newEmp.englishDay} onChange={e => setNewEmp({...newEmp, englishDay:parseInt(e.target.value) as any})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
-                            {WEEK_DAYS_BR.map((d,i) => <option key={i} value={i}>{d}</option>)}
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Tipo Contrato</label>
+                          <select value={newEmp.isHourly ? 'H' : 'C'} onChange={e => setNewEmp({...newEmp, isHourly: e.target.value === 'H'})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
+                            <option value="C">CLT / Estágio</option>
+                            <option value="H">Horista (Sem Meta)</option>
                           </select>
                         </div>
                       </div>
-                      <button type="submit" disabled={isSaving} className="w-full py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg mt-4 flex items-center justify-center gap-2">
-                        {isSaving ? <RefreshCw className="animate-spin" size={14}/> : <CheckCircle2 size={14}/>} 
-                        {editingEmployeeId ? 'Confirmar Alteração' : 'Cadastrar Colaborador'}
-                      </button>
+
+                      {!newEmp.isHourly && (
+                        <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-4">
+                          <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest text-center">Configuração de Jornada (Semana Inglesa)</p>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Meta Diária (h)</label>
+                              <input type="number" value={newEmp.dailyHours} onChange={e => setNewEmp({...newEmp, dailyHours:e.target.value})} className="w-full p-4 rounded-xl bg-white border border-slate-100 font-black text-sm"/>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Dia Curto (4h)</label>
+                              <select value={newEmp.englishDay} onChange={e => setNewEmp({...newEmp, englishDay:parseInt(e.target.value) as any})} className="w-full p-4 rounded-xl bg-white border border-slate-100 font-black text-sm">
+                                {WEEK_DAYS_BR.map((d,i) => <option key={i} value={i}>{d}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Carga Horária no Dia Curto (h)</label>
+                            <input type="number" value={newEmp.shortDayHours} onChange={e => setNewEmp({...newEmp, shortDayHours:e.target.value})} className="w-full p-4 rounded-xl bg-white border border-slate-100 font-black text-sm"/>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Início do Cálculo</label>
+                          <input type="date" required value={newEmp.startDate} onChange={e => setNewEmp({...newEmp, startDate:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm"/>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Saldo Inicial (HH:mm)</label>
+                          <input type="text" value={newEmp.initialBalanceStr} onChange={e => setNewEmp({...newEmp, initialBalanceStr:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm" placeholder="00:00"/>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 mt-4">
+                        <button type="submit" disabled={isSaving} className="flex-1 py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all">
+                          {isSaving ? <RefreshCw className="animate-spin" size={14}/> : <CheckCircle2 size={14}/>} 
+                          {editingEmployeeId ? 'Salvar Alterações' : 'Cadastrar Funcionário'}
+                        </button>
+                        {editingEmployeeId && (
+                          <button type="button" onClick={() => {
+                            setEditingEmployeeId(null);
+                            setNewEmp({ name:'', role:'', dailyHours:'8', englishDay:'6', shortDayHours:'4', initialBalanceStr:'00:00', isHourly:false, startDate: DEFAULT_START_DATE });
+                          }} className="px-6 py-4 bg-slate-200 text-slate-600 rounded-xl font-black uppercase text-[10px]">Cancelar</button>
+                        )}
+                      </div>
                     </form>
                   </div>
-                  <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-4 h-fit">
+
+                  <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4 h-fit">
                     {data.employees.map(emp => (
-                      <div key={emp.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between">
+                      <div key={emp.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between group hover:border-indigo-200 transition-all">
                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-slate-100 text-slate-500 rounded-xl flex items-center justify-center font-black">{emp.name.charAt(0)}</div>
+                            <div className="w-12 h-12 bg-slate-100 text-slate-500 rounded-xl flex items-center justify-center font-black group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-all">{emp.name.charAt(0)}</div>
                             <div>
                               <p className="font-black text-slate-800 text-sm">{emp.name}</p>
-                              <p className="text-[8px] font-bold text-indigo-500 uppercase">Início: {safeFormatDate(emp.startDate)}</p>
+                              <p className="text-[8px] font-bold text-indigo-500 uppercase">{emp.role} {emp.isHourly ? '• Horista' : ''}</p>
+                              <p className="text-[8px] font-black text-slate-300 uppercase mt-0.5">Início: {safeFormatDate(emp.startDate)}</p>
                             </div>
                          </div>
                          <div className="flex gap-2">
