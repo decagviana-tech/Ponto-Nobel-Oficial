@@ -23,6 +23,23 @@ export const getLocalDateString = (date: Date): string => {
   return `${year}-${month}-${day}`;
 };
 
+/**
+ * Gera uma string ISO respeitando o fuso horário local (sem o Z no final)
+ * para evitar que o banco de dados desloque as horas.
+ */
+export const getLocalISOString = (date: Date): string => {
+  const tzo = -date.getTimezoneOffset();
+  const dif = tzo >= 0 ? '+' : '-';
+  const pad = (num: number) => String(Math.floor(Math.abs(num))).padStart(2, '0');
+  
+  return date.getFullYear() +
+    '-' + pad(date.getMonth() + 1) +
+    '-' + pad(date.getDate()) +
+    'T' + pad(date.getHours()) +
+    ':' + pad(date.getMinutes()) +
+    ':' + pad(date.getSeconds());
+};
+
 export const formatMinutes = (minutes: number): string => {
   const isNegative = minutes < 0;
   const abs = Math.abs(minutes);
@@ -46,14 +63,13 @@ export const parseTimeStringToMinutes = (timeStr: string): number => {
 
 /**
  * Formata uma string de data/hora ou hora pura para exibição.
- * Suporta string | null | undefined para evitar erros de compilação.
  */
 export const formatTime = (dateString: string | null | undefined): string => {
   if (!dateString) return '--:--';
-  // Se for uma string de hora pura (HH:mm)
   if (dateString.length === 5 && dateString.includes(':')) return dateString;
   
-  const date = new Date(dateString);
+  // Forçamos a leitura como data local se não houver indicador de fuso
+  const date = new Date(dateString.includes('T') ? dateString : dateString.replace(' ', 'T'));
   if (isNaN(date.getTime())) return '--:--';
   return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 };
@@ -70,6 +86,7 @@ export const getExpectedMinutesForDate = (employee: Employee, date: Date): numbe
 
 export const calculateWorkedMinutes = (record: ClockRecord, now: Date = new Date()): number => {
   if (!record.clockIn) return 0;
+  // Usamos Date sem o "Z" para garantir que o navegador trate como horário local
   const start = new Date(record.clockIn);
   const end = record.clockOut ? new Date(record.clockOut) : now;
   let totalMinutes = Math.floor((end.getTime() - start.getTime()) / (1000 * 60));
@@ -91,14 +108,9 @@ export const calculateWorkedMinutes = (record: ClockRecord, now: Date = new Date
   return Math.max(0, totalMinutes);
 };
 
-/**
- * Exportação otimizada para Excel Brasileiro (Contabilidade)
- */
 export const exportToCSV = (mappedData: any[], filename: string) => {
   if (mappedData.length === 0) return;
-  
   const headers = Object.keys(mappedData[0]);
-  
   const csvRows = [
     headers.join(';'), 
     ...mappedData.map(row => 
@@ -110,7 +122,6 @@ export const exportToCSV = (mappedData: any[], filename: string) => {
       }).join(';')
     )
   ];
-  
   const csvContent = "\uFEFF" + csvRows.join("\n");
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);

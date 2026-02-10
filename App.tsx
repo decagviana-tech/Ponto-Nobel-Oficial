@@ -12,7 +12,8 @@ import {
   parseTimeStringToMinutes,
   exportToCSV,
   ENTRY_TYPE_LABELS,
-  getLocalDateString
+  getLocalDateString,
+  getLocalISOString
 } from './utils';
 import { 
   Coffee, Utensils, LogIn, LogOut, ChevronLeft, Lock, 
@@ -21,7 +22,7 @@ import {
   TrendingUp, Users, Settings, BookOpen, Sparkles, 
   Plus, RefreshCw, AlertCircle, CheckCircle2, Search,
   Calendar, BrainCircuit, HeartPulse, Palmtree, ShieldCheck,
-  History, SlidersHorizontal, Info
+  History, SlidersHorizontal, Info, Database, AlertTriangle
 } from 'lucide-react';
 
 const SUPABASE_URL = "https://afpcoquiivzrckabcvzo.supabase.co" as string; 
@@ -166,28 +167,28 @@ const App: React.FC = () => {
     if (!supabase) return;
     const todayStr = getLocalDateString(currentTime);
     const record = data.records.find(r => r.employeeId === employeeId && r.date === todayStr);
-    const nowISO = currentTime.toISOString();
+    const nowLocal = getLocalISOString(currentTime);
 
     try {
       if (!record) {
         const emp = data.employees.find(e => e.id === employeeId)!;
         await supabase.from('records').insert([{
-          employeeId, date: todayStr, clockIn: nowISO, type: 'WORK',
+          employeeId, date: todayStr, clockIn: nowLocal, type: 'WORK',
           expectedMinutes: getExpectedMinutesForDate(emp, currentTime)
         }]);
       } else {
         const action = getNextAction(record);
         const update: any = {};
-        if (action.stage === 'l_start') update.lunchStart = nowISO;
-        else if (action.stage === 'l_end') update.lunchEnd = nowISO;
-        else if (action.stage === 's_start') update.snackStart = nowISO;
-        else if (action.stage === 's_end') update.snackEnd = nowISO;
-        else if (action.stage === 'out') update.clockOut = nowISO;
+        if (action.stage === 'l_start') update.lunchStart = nowLocal;
+        else if (action.stage === 'l_end') update.lunchEnd = nowLocal;
+        else if (action.stage === 's_start') update.snackStart = nowLocal;
+        else if (action.stage === 's_end') update.snackEnd = nowLocal;
+        else if (action.stage === 'out') update.clockOut = nowLocal;
         
         await supabase.from('records').update(update).eq('id', record.id);
 
         if (action.stage === 'out') {
-          const worked = calculateWorkedMinutes({ ...record, ...update });
+          const worked = calculateWorkedMinutes({ ...record, ...update }, currentTime);
           await supabase.from('timeBank').insert([{
             employeeId, date: todayStr, minutes: worked - record.expectedMinutes, type: 'WORK'
           }]);
@@ -196,6 +197,49 @@ const App: React.FC = () => {
       }
       fetchData();
     } catch (e) { alert("Erro de conexão."); }
+  };
+
+  /**
+   * EXCLUSÃO REFORÇADA COM FEEDBACK DE RLS
+   */
+  const handleDeleteFullRecord = async (recordId: string, employeeId: string, date: string) => {
+    if (!supabase) return;
+    
+    if (confirm(`Deseja mesmo apagar o ponto e o saldo do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}?\n\nIsso removerá as batidas e recalculará o banco de horas.`)) {
+      setIsSaving(true);
+      try {
+        // 1. Tentar apagar o saldo primeiro
+        const { error: errorTB } = await supabase
+          .from('timeBank')
+          .delete()
+          .eq('employeeId', employeeId)
+          .eq('date', date)
+          .eq('type', 'WORK');
+
+        if (errorTB) {
+           console.error("Erro RLS TimeBank:", errorTB);
+           throw new Error(`O banco de dados recusou a exclusão do saldo. Verifique as permissões 'DELETE' na tabela 'timeBank' no painel do Supabase.`);
+        }
+
+        // 2. Tentar apagar o registro de batidas
+        const { error: errorRec } = await supabase
+          .from('records')
+          .delete()
+          .eq('id', recordId);
+
+        if (errorRec) {
+           console.error("Erro RLS Records:", errorRec);
+           throw new Error(`O banco de dados recusou a exclusão das batidas. Verifique as permissões 'DELETE' na tabela 'records' no painel do Supabase.`);
+        }
+
+        await fetchData();
+        alert("Ponto e saldo removidos com sucesso!");
+      } catch (err: any) {
+        alert(`FALHA NA EXCLUSÃO:\n\n${err.message}`);
+      } finally {
+        setIsSaving(false);
+      }
+    }
   };
 
   const handleSaveAdjustment = async (e: React.FormEvent) => {
@@ -215,7 +259,7 @@ const App: React.FC = () => {
         impactMinutes = finalMinutes - metaDoDia;
       }
 
-      await supabase.from('timeBank').insert([{
+      const { error } = await supabase.from('timeBank').insert([{
         employeeId: adjustmentForm.employeeId,
         date: adjustmentForm.date,
         minutes: impactMinutes,
@@ -223,11 +267,13 @@ const App: React.FC = () => {
         note: 'Ajuste manual administrativo'
       }]);
 
+      if (error) throw error;
+
       setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00', employeeId: '' });
-      fetchData();
+      await fetchData();
       alert("Ajuste aplicado com sucesso!");
-    } catch (err) {
-      alert("Erro ao salvar ajuste.");
+    } catch (err: any) {
+      alert("Erro ao salvar ajuste: " + err.message);
     } finally {
       setIsSaving(false);
     }
@@ -238,46 +284,38 @@ const App: React.FC = () => {
     if (!supabase || !justificationForm.employeeId) return;
     setIsSaving(true);
     try {
-      await supabase.from('timeBank').insert([{
+      const { error } = await supabase.from('timeBank').insert([{
         employeeId: justificationForm.employeeId,
         date: justificationForm.date,
         minutes: 0, 
         type: justificationForm.type,
         note: justificationForm.note
       }]);
+      if (error) throw error;
       setJustificationForm({ ...justificationForm, note: '', employeeId: '' });
-      fetchData();
+      await fetchData();
       alert("Abono registrado!");
-    } catch (err) {
-      alert("Erro ao salvar.");
+    } catch (err: any) {
+      alert("Erro ao salvar: " + err.message);
     } finally {
       setIsSaving(false);
     }
   };
 
-  /**
-   * Função centralizada para exclusão com feedback visual e tratamento de erro
-   */
   const handleDeleteEntry = async (id: string, message: string) => {
-    if (!supabase) {
-      alert("Erro: Banco de dados não disponível.");
-      return;
-    }
+    if (!supabase) return;
     if (confirm(message)) {
-      try {
-        const { error } = await supabase.from('timeBank').delete().eq('id', id);
-        if (error) {
-          alert("Erro técnico ao excluir: " + error.message);
-          console.error("Supabase delete error:", error);
-        } else {
-          await fetchData();
-        }
-      } catch (err) {
-        alert("Ocorreu um erro inesperado ao tentar excluir.");
-        console.error(err);
-      }
+      const { error } = await supabase.from('timeBank').delete().eq('id', id);
+      if (error) alert("Não foi possível excluir. O Supabase provavelmente bloqueou o comando (RLS Policy). Erro: " + error.message);
+      else await fetchData();
     }
   };
+
+  const filteredRecords = data.records.filter(r => {
+    const isDateInRange = r.date >= reportFilter.startDate && r.date <= reportFilter.endDate;
+    const isEmployeeMatch = reportFilter.employeeId === 'all' || r.employeeId === reportFilter.employeeId;
+    return isDateInRange && isEmployeeMatch;
+  });
 
   const handleExportAccountantReport = () => {
     const mapped = filteredRecords.map(r => {
@@ -288,16 +326,17 @@ const App: React.FC = () => {
         'Funcionário': emp?.name || '---',
         'Data': new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR'),
         'Entrada': formatTime(r.clockIn),
-        'Almoço': `${formatTime(r.lunchStart)} - ${formatTime(r.lunchEnd)}`,
-        'Lanche': `${formatTime(r.snackStart)} - ${formatTime(r.snackEnd)}`,
+        'I. Almoço': formatTime(r.lunchStart),
+        'R. Almoço': formatTime(r.lunchEnd),
+        'I. Lanche': formatTime(r.snackStart),
+        'R. Lanche': formatTime(r.snackEnd),
         'Saída': formatTime(r.clockOut),
         'Saldo do Dia': tbe ? formatMinutes(tbe.minutes) : '---',
-        'Tipo': ENTRY_TYPE_LABELS[r.type] || 'Comum',
-        'Observação': r.note || ''
+        'Tipo': ENTRY_TYPE_LABELS[r.type] || 'Trabalho',
+        'Obs': r.note || ''
       };
     });
-
-    exportToCSV(mapped, 'Relatorio_Folha_Nobel');
+    exportToCSV(mapped, 'Folha_Ponto_Nobel');
   };
 
   const getNextAction = (record?: ClockRecord) => {
@@ -326,12 +365,6 @@ const App: React.FC = () => {
       }
     }
   };
-
-  const filteredRecords = data.records.filter(r => {
-    const isDateInRange = r.date >= reportFilter.startDate && r.date <= reportFilter.endDate;
-    const isEmployeeMatch = reportFilter.employeeId === 'all' || r.employeeId === reportFilter.employeeId;
-    return isDateInRange && isEmployeeMatch;
-  });
 
   return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col md:flex-row text-slate-200 overflow-x-hidden">
@@ -582,23 +615,38 @@ const App: React.FC = () => {
 
               {activeTab === 'admin' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                  <div className="lg:col-span-5 bg-white p-10 rounded-[3rem] shadow-xl border border-slate-100 flex flex-col items-center">
-                    <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-6 shadow-inner"><Plus size={32}/></div>
-                    <h2 className="text-3xl font-black font-serif italic mb-8">Ajuste Manual</h2>
-                    
-                    <form onSubmit={handleSaveAdjustment} className="w-full space-y-6">
-                       <select required value={adjustmentForm.employeeId} onChange={e => setAdjustmentForm({...adjustmentForm, employeeId: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner">
-                          <option value="">Selecionar Funcionário...</option>
-                          {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                       </select>
-                       <div className="flex items-center gap-3">
-                          <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="flex-1 p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
-                       </div>
-                       <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
-                       <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center gap-3">
-                          {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar Lançamento
-                       </button>
-                    </form>
+                  <div className="lg:col-span-5 flex flex-col gap-6">
+                    <div className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-100 flex flex-col items-center">
+                      <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-6 shadow-inner"><Plus size={32}/></div>
+                      <h2 className="text-3xl font-black font-serif italic mb-8">Ajuste Manual</h2>
+                      
+                      <form onSubmit={handleSaveAdjustment} className="w-full space-y-6">
+                         <select required value={adjustmentForm.employeeId} onChange={e => setAdjustmentForm({...adjustmentForm, employeeId: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner">
+                            <option value="">Selecionar Funcionário...</option>
+                            {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                         </select>
+                         <div className="flex items-center gap-3">
+                            <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="flex-1 p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
+                         </div>
+                         <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
+                         <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center gap-3">
+                            {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar Lançamento
+                         </button>
+                      </form>
+                    </div>
+
+                    <div className="bg-amber-50 p-6 rounded-3xl border border-amber-100 flex items-start gap-4">
+                      <div className="bg-amber-500 p-2 rounded-lg text-white"><AlertTriangle size={20}/></div>
+                      <div>
+                        <p className="text-amber-900 font-black text-xs uppercase mb-1">Checklist de Solução (Exclusão)</p>
+                        <p className="text-amber-700 text-[10px] leading-relaxed">
+                          Se o botão de lixeira falhar, siga estes passos no Supabase:<br/>
+                          1. Vá em <b>Authentication -> Policies</b><br/>
+                          2. Habilite <b>DELETE</b> para as tabelas <code>records</code> e <code>timeBank</code>.<br/>
+                          3. A função deve ser <code>anon</code> ou <code>public</code>.
+                        </p>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="lg:col-span-7 bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col">
@@ -621,6 +669,81 @@ const App: React.FC = () => {
                        })}
                     </div>
                   </div>
+                </div>
+              )}
+
+              {activeTab === 'reports' && (
+                <div className="space-y-6 animate-in slide-in-from-bottom-2">
+                   <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
+                      <div className="flex-1 min-w-[200px] space-y-1">
+                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Colaborador</label>
+                        <select value={reportFilter.employeeId} onChange={e => setReportFilter({...reportFilter, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs">
+                          <option value="all">Todos os Funcionários</option>
+                          {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Período</label>
+                        <div className="flex items-center gap-2">
+                           <input type="date" value={reportFilter.startDate} onChange={e => setReportFilter({...reportFilter, startDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                           <input type="date" value={reportFilter.endDate} onChange={e => setReportFilter({...reportFilter, endDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                        </div>
+                      </div>
+                      <button onClick={handleExportAccountantReport} className="p-4 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-all flex items-center gap-2 font-black uppercase text-[10px]"><Download size={16}/> Baixar Excel (Contador)</button>
+                   </div>
+
+                   <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                          <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
+                            <tr>
+                              <th className="px-8 py-5">Data</th>
+                              <th className="px-8 py-5">Nome</th>
+                              <th className="px-8 py-5 text-center">Entrada</th>
+                              <th className="px-8 py-5 text-center">Saída</th>
+                              <th className="px-8 py-5 text-center">Saldo Dia</th>
+                              <th className="px-8 py-5">Tipo</th>
+                              <th className="px-8 py-5 text-center">Resetar</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {filteredRecords.length > 0 ? filteredRecords.map(r => {
+                              const emp = data.employees.find(e => e.id === r.employeeId);
+                              const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+                              return (
+                                <tr key={r.id} className="text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors">
+                                  <td className="px-8 py-4 font-mono">{new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
+                                  <td className="px-8 py-4">{emp?.name || '---'}</td>
+                                  <td className="px-8 py-4 text-center font-mono">{formatTime(r.clockIn)}</td>
+                                  <td className="px-8 py-4 text-center font-mono">{formatTime(r.clockOut)}</td>
+                                  <td className={`px-8 py-4 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                    {tbe ? formatMinutes(tbe.minutes) : '---'}
+                                  </td>
+                                  <td className="px-8 py-4">
+                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[9px] uppercase">{ENTRY_TYPE_LABELS[r.type] || 'Trabalho'}</span>
+                                  </td>
+                                  <td className="px-8 py-4 text-center">
+                                    <button 
+                                      type="button" 
+                                      disabled={isSaving}
+                                      onClick={() => handleDeleteFullRecord(r.id, r.employeeId, r.date)} 
+                                      className="p-2 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                                      title="Resetar Ponto e Saldo"
+                                    >
+                                      {isSaving ? <RefreshCw className="animate-spin" size={16}/> : <Trash2 size={16}/>}
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            }) : (
+                              <tr>
+                                <td colSpan={7} className="px-8 py-12 text-center text-slate-400 font-bold italic">Nenhum registro encontrado para este período.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                   </div>
                 </div>
               )}
 
