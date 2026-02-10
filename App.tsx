@@ -13,7 +13,6 @@ import {
   exportToCSV,
   ENTRY_TYPE_LABELS
 } from './utils';
-// Added CheckCircle2 to fix the 'Cannot find name' error
 import { 
   Coffee, Utensils, LogIn, LogOut, ChevronLeft, Lock, 
   UserCheck, X, Clock as ClockIcon, 
@@ -153,7 +152,7 @@ const App: React.FC = () => {
       const entDate = new Date(ent.date + "T00:00:00");
       if (entDate < startDate) return;
 
-      if (ent.type === 'WORK') {
+      if (ent.type === 'WORK' || ent.type === 'WORK_RETRO') {
         balance += (ent.minutes + getExpectedMinutesForDate(emp, entDate));
       } else {
         balance += ent.minutes;
@@ -162,7 +161,7 @@ const App: React.FC = () => {
 
     const todayStr = currentTime.toISOString().split('T')[0];
     const activeRec = data.records.find(r => r.employeeId === empId && r.date === todayStr);
-    const hasFinalizedWorkToday = entries.some(t => t.date === todayStr && t.type === 'WORK');
+    const hasFinalizedWorkToday = entries.some(t => t.date === todayStr && (t.type === 'WORK' || t.type === 'WORK_RETRO'));
     
     if (activeRec && !hasFinalizedWorkToday) {
       const workedSoFar = calculateWorkedMinutes(activeRec, currentTime);
@@ -261,6 +260,7 @@ const App: React.FC = () => {
         const emp = data.employees.find(ev => ev.id === retroForm.employeeId)!;
         const targetDate = new Date(retroForm.date + "T12:00:00");
         const meta = getExpectedMinutesForDate(emp, targetDate);
+        // Salvamos a diferença (saldo) no banco, mas mostraremos o total na UI
         finalMins = mins - meta;
       }
 
@@ -269,14 +269,14 @@ const App: React.FC = () => {
         date: retroForm.date,
         minutes: finalMins,
         type: retroForm.type,
-        note: retroForm.note || `Ajuste manual: ${ENTRY_TYPE_LABELS[retroForm.type]}`
+        note: retroForm.note || `Lançamento: ${ENTRY_TYPE_LABELS[retroForm.type]}`
       }]);
       if (error) throw error;
       setRetroForm({ ...retroForm, amountStr: '00:00', note: '' });
       fetchData();
       alert("Lançamento salvo com sucesso!");
     } catch (err) {
-      alert("Erro ao aplicar ajuste.");
+      alert("Erro ao salvar.");
     }
   };
 
@@ -320,9 +320,9 @@ const App: React.FC = () => {
       if (newEntries.length > 0) await supabase.from('timeBank').insert(newEntries);
       setJustificationForm({ ...justificationForm, note: '' });
       fetchData();
-      alert("Abono(s) registrado(s)!");
+      alert("Abono registrado!");
     } catch (err) {
-      alert("Erro ao registrar abono.");
+      alert("Erro ao registrar.");
     } finally {
       setIsSubmittingJustification(false);
     }
@@ -397,7 +397,7 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      <main className="flex-1 p-6 md:p-12 md:ml-64 bg-slate-50 text-slate-900 min-h-screen">
+      <main className="flex-1 p-6 md:p-12 md:ml-64 bg-slate-50 text-slate-900 min-h-screen overflow-y-auto">
         <header className="mb-12 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
           <div className="space-y-1">
             <h1 className="text-4xl font-black tracking-tighter text-slate-900 font-serif italic lowercase first-letter:capitalize">
@@ -504,7 +504,7 @@ const App: React.FC = () => {
               {activeTab === 'employees' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
                    <div className="lg:col-span-4 bg-white p-12 rounded-[4rem] shadow-xl border border-slate-100 flex flex-col">
-                      <h2 className="text-2xl font-black font-serif italic mb-10 flex items-center gap-4"><UserPlus size={28}/> {editingEmployeeId ? 'Editar Colaborador' : 'Novo Colaborador'}</h2>
+                      <h2 className="text-2xl font-black font-serif italic mb-10 flex items-center gap-4"><UserPlus size={28}/> {editingEmployeeId ? 'Editar Perfil' : 'Novo Perfil'}</h2>
                       <form onSubmit={async (e) => {
                          e.preventDefault();
                          if (!supabase) return;
@@ -519,14 +519,14 @@ const App: React.FC = () => {
                          setEditingEmployeeId(null); 
                          setNewEmp({ name:'', role:'', dailyHours:'8', englishDay:'6', shortDayHours:'0', initialBalanceStr:'00:00', isHourly:false, startDate: DEFAULT_START_DATE }); 
                          fetchData();
-                         alert("Salvo com sucesso!");
+                         alert("Perfil salvo!");
                       }} className="space-y-6">
                          <div className="space-y-2">
                             <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Nome</label>
                             <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-100 font-bold" placeholder="Nome Completo..."/>
                          </div>
                          <div className="space-y-2">
-                            <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Data Início (Controle Nobel)</label>
+                            <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Início do Controle</label>
                             <input type="date" value={newEmp.startDate} onChange={e => setNewEmp({...newEmp, startDate: e.target.value})} className="w-full p-5 rounded-2xl bg-indigo-50 border-2 border-indigo-100 font-black text-indigo-700"/>
                          </div>
                          <div className="grid grid-cols-2 gap-5">
@@ -535,14 +535,14 @@ const App: React.FC = () => {
                                <input type="number" value={newEmp.dailyHours} onChange={e => setNewEmp({...newEmp, dailyHours: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-100 text-center font-black"/>
                             </div>
                             <div className="space-y-2">
-                               <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Dia Folga Extra</label>
+                               <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Dia de Folga</label>
                                <select value={newEmp.englishDay} onChange={e => setNewEmp({...newEmp, englishDay: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-100 font-black">
                                   {WEEK_DAYS_BR.map((d, i) => <option key={i} value={i}>{d}</option>)}
                                </select>
                             </div>
                          </div>
                          <div className="space-y-2">
-                            <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Semana Inglesa (Meta em horas)</label>
+                            <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Semana Inglesa (Meta no dia da folga)</label>
                             <input type="number" value={newEmp.shortDayHours} onChange={e => setNewEmp({...newEmp, shortDayHours: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-100 text-center font-black" placeholder="0 para folga total"/>
                          </div>
                          <button type="submit" className="w-full py-6 bg-indigo-600 text-white rounded-[2.5rem] font-black uppercase text-sm shadow-xl hover:bg-indigo-700 transition-all">Salvar Alterações</button>
@@ -571,17 +571,17 @@ const App: React.FC = () => {
               {activeTab === 'admin' && (
                 <div className="flex flex-col gap-10">
                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-                      {/* FORMULÁRIO DE AJUSTE MANUAL - CORREÇÃO DE BOTÃO */}
-                      <div className="lg:col-span-5 bg-white p-12 rounded-[4rem] shadow-xl border border-slate-100 flex flex-col gap-10">
+                      
+                      <div className="lg:col-span-5 bg-white p-12 rounded-[4rem] shadow-xl border border-slate-100 flex flex-col gap-8">
                          <div className="flex justify-between items-center">
                            <div className="flex items-center gap-5">
                              <div className="p-5 bg-indigo-50 text-indigo-600 rounded-[2rem] shadow-inner"><Plus size={32}/></div>
                              <h2 className="text-3xl font-black font-serif italic">Ajuste Manual</h2>
                            </div>
-                           <button onClick={fillStandardShift} type="button" className="px-5 py-3 bg-indigo-100 text-indigo-700 rounded-2xl text-[11px] font-black uppercase hover:bg-indigo-600 hover:text-white transition-all">Lançar Dia Inteiro</button>
+                           <button onClick={fillStandardShift} type="button" className="px-5 py-3 bg-indigo-100 text-indigo-700 rounded-2xl text-[11px] font-black uppercase hover:bg-indigo-600 hover:text-white transition-all shadow-sm">Lançar Dia Inteiro</button>
                          </div>
                          
-                         <form onSubmit={handleRetroAdjust} className="space-y-8">
+                         <form onSubmit={handleRetroAdjust} className="space-y-8 flex flex-col flex-1">
                             <select required value={retroForm.employeeId} onChange={e => setRetroForm({...retroForm, employeeId: e.target.value})} className="w-full p-6 rounded-3xl bg-slate-50 border border-slate-100 font-black text-lg outline-none focus:ring-4 focus:ring-indigo-500/10">
                                <option value="">Selecionar Funcionário...</option>
                                {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
@@ -590,8 +590,8 @@ const App: React.FC = () => {
                             <div className="grid grid-cols-2 gap-5">
                                <input type="date" value={retroForm.date} onChange={e => setRetroForm({...retroForm, date: e.target.value})} className="w-full p-6 rounded-3xl bg-slate-50 border border-slate-100 font-black"/>
                                <div className="flex bg-slate-100 rounded-[2rem] p-2 border border-slate-200">
-                                  <button type="button" onClick={() => setRetroForm({...retroForm, isPositive: true})} className={`flex-1 py-4 rounded-2xl font-black text-xl transition-all ${retroForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400'}`}>+</button>
-                                  <button type="button" onClick={() => setRetroForm({...retroForm, isPositive: false})} className={`flex-1 py-4 rounded-2xl font-black text-xl transition-all ${!retroForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400'}`}>-</button>
+                                  <button type="button" onClick={() => setRetroForm({...retroForm, isPositive: true})} className={`flex-1 py-4 rounded-2xl font-black text-xl transition-all ${retroForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-indigo-400'}`}>+</button>
+                                  <button type="button" onClick={() => setRetroForm({...retroForm, isPositive: false})} className={`flex-1 py-4 rounded-2xl font-black text-xl transition-all ${!retroForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-indigo-400'}`}>-</button>
                                </div>
                             </div>
                             
@@ -606,79 +606,99 @@ const App: React.FC = () => {
                                </button>
                             </div>
 
-                            <div className="space-y-5">
-                               <input type="text" value={retroForm.amountStr} onChange={e => setRetroForm({...retroForm, amountStr: e.target.value})} className="w-full p-10 rounded-[3rem] bg-slate-50 border-2 border-slate-200 font-mono font-black text-5xl text-center text-slate-800" placeholder="00:00"/>
-                               <button type="submit" className="w-full py-8 bg-[#0f172a] text-white rounded-[3rem] font-black uppercase text-lg shadow-2xl hover:bg-black transition-all active:scale-95">Salvar Lançamento</button>
+                            <div className="space-y-6 mt-auto">
+                               <input type="text" value={retroForm.amountStr} onChange={e => setRetroForm({...retroForm, amountStr: e.target.value})} className="w-full p-8 rounded-[3rem] bg-slate-50 border-2 border-slate-200 font-mono font-black text-5xl text-center text-slate-800" placeholder="00:00"/>
+                               <button type="submit" className="w-full py-8 bg-[#0f172a] text-white rounded-[3rem] font-black uppercase text-lg shadow-2xl hover:bg-black transition-all active:scale-95 border-b-8 border-indigo-900">Salvar Lançamento</button>
                             </div>
                             
-                            <p className="text-[10px] text-slate-400 font-bold uppercase text-center leading-relaxed px-4">
+                            <p className="text-[10px] text-slate-400 font-bold uppercase text-center leading-relaxed px-4 italic">
                                 {retroForm.type === 'WORK_RETRO' 
-                                  ? "Modo 'Trabalho Real': O sistema subtrai a meta automaticamente das horas totais."
-                                  : "Modo 'Ajuste Delta': Adiciona ou remove o valor exato do saldo total."}
+                                  ? "Modo 'Trabalho Real': Digite as horas totais trabalhadas. O sistema abate a meta sozinho."
+                                  : "Modo 'Ajuste Delta': Digite apenas o tempo (crédito ou débito) a ser somado ao banco."}
                             </p>
                          </form>
                       </div>
                       
-                      {/* HISTÓRICO DE AJUSTES COM LIXEIRA - RESTAURADO */}
-                      <div className="lg:col-span-7 bg-white rounded-[4rem] shadow-sm border border-slate-100 overflow-hidden flex flex-col">
+                      <div className="lg:col-span-7 bg-white rounded-[4rem] shadow-sm border border-slate-100 overflow-hidden flex flex-col min-h-[700px]">
                          <div className="bg-slate-50/50 px-10 py-8 border-b border-slate-100 flex justify-between items-center">
-                            <span className="text-xs font-black uppercase text-slate-400">Histórico Recente de Lançamentos</span>
-                            <Info size={18} className="text-slate-300"/>
+                            <div>
+                               <span className="text-xs font-black uppercase text-slate-400 block tracking-widest">Histórico de Lançamentos Manuais</span>
+                               <span className="text-[10px] font-bold text-indigo-400 uppercase mt-1">Lançados no Painel</span>
+                            </div>
+                            <ClipboardCheck size={24} className="text-slate-300"/>
                          </div>
                          <div className="overflow-y-auto flex-1">
                            <table className="w-full text-left">
-                              <thead className="bg-slate-50/80 sticky top-0 backdrop-blur-md">
+                              <thead className="bg-slate-50/80 sticky top-0 backdrop-blur-md z-20">
                                  <tr>
-                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400">Pessoa / Data</th>
-                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400">Tipo</th>
-                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-right">Crédito</th>
-                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-center">Excluir</th>
+                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 tracking-tighter">Colaborador</th>
+                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-center">Data</th>
+                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-right">Valor Lançado</th>
+                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-center">Ações</th>
                                  </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100">
                                  {data.timeBank.filter(t => t.type !== 'WORK').slice(0, 50).map(t => {
                                    const emp = data.employees.find(e => e.id === t.employeeId);
                                    const isAwaiting = idAwaitingDelete === t.id;
+                                   const targetDate = new Date(t.date + "T12:00:00");
+                                   
+                                   // EXIBIÇÃO INTELIGENTE: Se for retroativo, mostramos o tempo TOTAL (delta + meta)
+                                   let displayMinutes = t.minutes;
+                                   if (t.type === 'WORK_RETRO' && emp) {
+                                      displayMinutes = t.minutes + getExpectedMinutesForDate(emp, targetDate);
+                                   }
+
                                    return (
                                      <tr key={t.id} className="hover:bg-slate-50/50 transition-colors group">
                                         <td className="px-10 py-8">
-                                           <p className="font-black text-slate-800 text-lg leading-tight truncate max-w-[180px]">{emp?.name || '---'}</p>
-                                           <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-widest">{new Date(t.date + "T00:00:00").toLocaleDateString('pt-BR')}</p>
-                                        </td>
-                                        <td className="px-10 py-8">
-                                           <span className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border shadow-sm ${
+                                           <p className="font-black text-slate-800 text-lg leading-tight truncate max-w-[150px]">{emp?.name || '---'}</p>
+                                           <span className={`mt-2 inline-block px-3 py-1 rounded-full text-[9px] font-black uppercase border ${
                                               t.type === 'MEDICAL' ? 'bg-rose-50 text-rose-600 border-rose-100' :
                                               t.type === 'VACATION' ? 'bg-amber-50 text-amber-600 border-amber-100' :
-                                              t.type === 'BONUS' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                                              t.type === 'OFF_DAY' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
                                               'bg-indigo-50 text-indigo-600 border-indigo-100'
                                            }`}>
                                               {ENTRY_TYPE_LABELS[t.type]}
                                            </span>
                                         </td>
-                                        <td className={`px-10 py-8 text-right font-mono font-black text-xl ${t.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatMinutes(t.minutes)}</td>
                                         <td className="px-10 py-8 text-center">
-                                           <button 
-                                              onClick={() => handleDeleteTimeBankEntry(t.id)} 
-                                              disabled={isDeleting && isAwaiting}
-                                              className={`p-4 rounded-2xl transition-all shadow-md group relative overflow-hidden min-w-[50px] ${
-                                                isAwaiting 
-                                                  ? 'bg-rose-600 text-white scale-110' 
-                                                  : 'bg-rose-50 text-rose-500 hover:bg-rose-600 hover:text-white'
-                                              }`}
-                                           >
-                                              {isAwaiting ? (
-                                                <div className="flex items-center gap-2 animate-pulse">
-                                                  <CheckCircle2 size={20}/>
-                                                  <span className="text-[9px] font-black uppercase">CONFIRMAR?</span>
-                                                </div>
-                                              ) : <Trash2 size={22}/>}
-                                           </button>
+                                           <p className="text-[11px] font-mono font-black text-slate-400 uppercase tracking-widest">{new Date(t.date + "T00:00:00").toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit', year:'2-digit'})}</p>
+                                        </td>
+                                        <td className={`px-10 py-8 text-right font-mono font-black text-xl ${displayMinutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                          {formatMinutes(displayMinutes)}
+                                        </td>
+                                        <td className="px-10 py-8 text-center">
+                                           <div className="flex justify-center">
+                                              <button 
+                                                onClick={() => handleDeleteTimeBankEntry(t.id)} 
+                                                disabled={isDeleting && isAwaiting}
+                                                className={`p-5 rounded-3xl transition-all shadow-sm group relative overflow-hidden min-w-[60px] flex items-center justify-center ${
+                                                  isAwaiting 
+                                                    ? 'bg-rose-600 text-white scale-110 shadow-rose-200 shadow-xl' 
+                                                    : 'bg-rose-50 text-rose-500 hover:bg-rose-600 hover:text-white'
+                                                }`}
+                                              >
+                                                {isAwaiting ? (
+                                                  <div className="flex items-center gap-2 animate-pulse">
+                                                    <CheckCircle2 size={20}/>
+                                                    <span className="text-[9px] font-black uppercase">CONFIRMAR?</span>
+                                                  </div>
+                                                ) : <Trash2 size={24}/>}
+                                              </button>
+                                           </div>
                                         </td>
                                      </tr>
                                    )
                                  })}
                               </tbody>
                            </table>
+                           {data.timeBank.filter(t => t.type !== 'WORK').length === 0 && (
+                              <div className="p-20 text-center text-slate-300 italic">
+                                 <ClipboardCheck size={64} className="mx-auto mb-4 opacity-10"/>
+                                 <p className="font-bold text-sm">Nenhum lançamento manual encontrado.</p>
+                              </div>
+                           )}
                          </div>
                       </div>
                    </div>
@@ -697,21 +717,21 @@ const App: React.FC = () => {
                             <button onClick={async () => {
                               if (newPin.length !== 4) return;
                               await supabase?.from('settings').update({ managerPin: newPin }).eq('id', 1);
-                              setNewPin(''); alert("PIN Atualizado com sucesso!");
-                            }} className="w-full py-8 bg-[#0f172a] text-white rounded-[3rem] font-black uppercase text-lg shadow-2xl hover:bg-black transition-all">Salvar Novo PIN</button>
+                              setNewPin(''); alert("PIN Atualizado!");
+                            }} className="w-full py-8 bg-[#0f172a] text-white rounded-[3rem] font-black uppercase text-lg shadow-2xl hover:bg-black transition-all border-b-8 border-indigo-900">Salvar PIN</button>
                          </div>
                       </div>
                       
                       <div className="bg-white p-12 rounded-[4rem] shadow-xl border border-slate-100 flex flex-col justify-between">
                          <div className="flex items-center gap-5">
                             <div className="p-5 bg-indigo-50 text-indigo-600 rounded-[2rem] shadow-inner"><RefreshCw size={32}/></div>
-                            <h2 className="text-3xl font-black font-serif italic text-slate-800">Manutenção</h2>
+                            <h2 className="text-3xl font-black font-serif italic text-slate-800">Sincronização</h2>
                          </div>
                          <div className="space-y-6 pt-10">
                             <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="w-full py-6 bg-rose-50 text-rose-600 border-2 border-rose-100 rounded-[2rem] font-black uppercase text-xs hover:bg-rose-100 transition-all flex items-center justify-center gap-3">
-                              <RefreshCw size={20}/> Limpar Cache Local (Re-sync)
+                              <RefreshCw size={20}/> Re-sincronizar Dados (Cache Clear)
                             </button>
-                            <p className="text-center text-[10px] font-black text-slate-300 uppercase tracking-[0.5em] mt-8">Nobel Ponto v5.2 - Petrópolis Office Sync</p>
+                            <p className="text-center text-[10px] font-black text-slate-300 uppercase tracking-[0.5em] mt-8">Nobel Ponto v5.6 - OFFICE SYNC</p>
                          </div>
                       </div>
                    </div>
@@ -721,7 +741,7 @@ const App: React.FC = () => {
               {activeTab === 'reports' && (
                 <div className="bg-white p-10 rounded-[3.5rem] border border-slate-100 shadow-sm">
                    <div className="flex justify-between items-center mb-10">
-                      <h2 className="text-2xl font-black font-serif italic">Relatórios Oficiais</h2>
+                      <h2 className="text-2xl font-black font-serif italic">Relatórios Petrópolis</h2>
                       <div className="flex gap-4">
                         <button onClick={() => exportToCSV(data.records, 'folha_nobel')} className="px-6 py-4 bg-indigo-50 text-indigo-700 rounded-2xl font-black uppercase text-[10px] flex items-center gap-2 shadow-sm hover:shadow-md transition-all"><Download size={18}/> Folha de Ponto</button>
                         <button onClick={() => exportToCSV(data.timeBank, 'banco_nobel')} className="px-6 py-4 bg-[#0f172a] text-white rounded-2xl font-black uppercase text-[10px] flex items-center gap-2 shadow-xl hover:bg-black transition-all"><Download size={18}/> Banco de Horas</button>
