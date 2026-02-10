@@ -60,7 +60,7 @@ const App: React.FC = () => {
     employeeId: '',
     date: getLocalDateString(new Date()),
     amountStr: '00:00',
-    type: 'WORK_RETRO' as EntryType,
+    type: 'ADJUSTMENT' as EntryType,
     isPositive: true
   });
 
@@ -140,7 +140,7 @@ const App: React.FC = () => {
     const yesterdayStr = getLocalDateString(yesterday);
 
     let maxSafety = 0; 
-    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 3000) {
+    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 3650) { // Até 10 anos de segurança
       maxSafety++;
       const dateKey = getLocalDateString(loopDate);
       const dayEntries = entriesMap.get(dateKey) || [];
@@ -148,6 +148,7 @@ const App: React.FC = () => {
       
       if (dayEntries.length > 0) {
         dayEntries.forEach(ent => {
+          // Tipos que afetam positivamente ou negativamente o saldo
           if (['WORK', 'WORK_RETRO', 'ADJUSTMENT', 'BONUS', 'MEDICAL', 'HOLIDAY', 'VACATION', 'OFF_DAY'].includes(ent.type)) {
             totalBalance += ent.minutes;
           }
@@ -160,6 +161,7 @@ const App: React.FC = () => {
       loopDate.setDate(loopDate.getDate() + 1);
     }
 
+    // Lógica para o dia de hoje
     const todayStr = getLocalDateString(currentTime);
     const todayRec = data.records.find(r => r.employeeId === empId && r.date === todayStr);
     const todayManualEntries = entriesMap.get(todayStr) || [];
@@ -217,20 +219,19 @@ const App: React.FC = () => {
 
   const handleDeleteFullRecord = async (recordId: string, employeeId: string, date: string) => {
     if (!supabase) return;
-    if (confirm(`Atenção: Isso apagará permanentemente as batidas do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}. Confirmar?`)) {
+    if (confirm(`Atenção: Você está apagando o registro do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}. Confirmar?`)) {
       setIsSaving(true);
       try {
-        // Apagar do banco de horas primeiro
+        // Apagar do banco de horas primeiro usando o critério correto
         await supabase.from('timeBank').delete().match({ employeeId, date, type: 'WORK' });
-        // Depois apagar o registro físico das batidas
+        // Depois apagar o registro físico
         const { error } = await supabase.from('records').delete().eq('id', recordId);
-        
         if (error) throw error;
         
         await fetchData();
         alert("Ponto excluído com sucesso!");
       } catch (err: any) {
-        alert("Erro ao excluir registro: " + err.message);
+        alert("Erro ao excluir: " + err.message);
       } finally {
         setIsSaving(false);
       }
@@ -244,25 +245,29 @@ const App: React.FC = () => {
     try {
       const emp = data.employees.find(e => e.id === adjustmentForm.employeeId);
       if (!emp) return;
+      
       const baseMinutes = parseTimeStringToMinutes(adjustmentForm.amountStr);
       const finalMinutes = adjustmentForm.isPositive ? Math.abs(baseMinutes) : -Math.abs(baseMinutes);
-      let impactMinutes = finalMinutes;
-      if (adjustmentForm.type === 'WORK_RETRO') {
-        const metaDoDia = getExpectedMinutesForDate(emp, new Date(adjustmentForm.date + "T12:00:00"));
-        impactMinutes = finalMinutes - metaDoDia;
-      }
+      
+      // Salva no banco usando camelCase
       const { error } = await supabase.from('timeBank').insert([{
         employeeId: adjustmentForm.employeeId,
         date: adjustmentForm.date,
-        minutes: impactMinutes,
+        minutes: finalMinutes,
         type: adjustmentForm.type,
         note: 'Ajuste manual administrativo'
       }]);
+      
       if (error) throw error;
+      
       setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00', employeeId: '' });
       await fetchData();
       alert("Ajuste aplicado com sucesso!");
-    } catch (err: any) { alert("Erro ao salvar ajuste: " + err.message); } finally { setIsSaving(false); }
+    } catch (err: any) { 
+      alert("Erro ao salvar ajuste: " + err.message); 
+    } finally { 
+      setIsSaving(false); 
+    }
   };
 
   const handleSaveJustification = async (e: React.FormEvent) => {
@@ -303,6 +308,7 @@ const App: React.FC = () => {
         'Entrada': formatTime(r.clockIn),
         'I.Almoço': formatTime(r.lunchStart),
         'R.Almoço': formatTime(r.lunchEnd),
+        'Saída': formatTime(r.clockOut),
         'Saldo do Dia': tbe ? formatMinutes(tbe.minutes) : '---',
         'Tipo': ENTRY_TYPE_LABELS[r.type] || 'Trabalho'
       };
@@ -341,6 +347,15 @@ const App: React.FC = () => {
         setTimeout(() => { setPinInput(''); setLoginError(false); }, 600);
       }
     }
+  };
+
+  // Função robusta para formatar a data de início
+  const safeFormatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return "N/A";
+    const cleanDate = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+    const d = new Date(cleanDate + "T12:00:00");
+    if (isNaN(d.getTime())) return "Data Inválida";
+    return d.toLocaleDateString('pt-BR');
   };
 
   return (
@@ -471,7 +486,6 @@ const App: React.FC = () => {
                       if(!supabase) return;
                       setIsSaving(true);
                       
-                      // USANDO APENAS camelCase - CONFIRMADO PELO ERRO DO BANCO
                       const payload = {
                         name: newEmp.name, 
                         role: newEmp.role, 
@@ -530,21 +544,21 @@ const App: React.FC = () => {
                             <div className="w-12 h-12 bg-slate-100 text-slate-500 rounded-xl flex items-center justify-center font-black">{emp.name.charAt(0)}</div>
                             <div>
                               <p className="font-black text-slate-800 text-sm">{emp.name}</p>
-                              <p className="text-[8px] font-bold text-indigo-500 uppercase">Início: {new Date(emp.startDate + "T12:00:00").toLocaleDateString('pt-BR')}</p>
+                              <p className="text-[8px] font-bold text-indigo-500 uppercase">Início: {safeFormatDate(emp.startDate)}</p>
                             </div>
                          </div>
                          <div className="flex gap-2">
-                            <button type="button" onClick={() => {
+                            <button onClick={() => {
                                setEditingEmployeeId(emp.id);
                                setNewEmp({
                                  name: emp.name, role: emp.role, dailyHours: (emp.baseDailyMinutes/60).toString(),
                                  englishDay: emp.englishWeekDay.toString() as any, 
                                  shortDayHours: (emp.englishWeekMinutes/60).toString(),
                                  initialBalanceStr: formatMinutes(emp.initialBalanceMinutes).replace('+', '').replace('-', '').replace('h ', ':').replace('m', '').trim(),
-                                 startDate: emp.startDate.split('T')[0], isHourly: emp.isHourly || false
+                                 startDate: (emp.startDate || '').split('T')[0], isHourly: emp.isHourly || false
                                });
                             }} className="p-2 bg-slate-50 text-slate-400 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"><Edit2 size={16}/></button>
-                            <button type="button" onClick={async () => { 
+                            <button onClick={async () => { 
                               if(confirm(`Remover permanentemente ${emp.name}?`)) { 
                                 await supabase!.from('employees').delete().eq('id', emp.id); fetchData();
                               } 
@@ -597,7 +611,7 @@ const App: React.FC = () => {
                                  <tr key={t.id} className="text-slate-700">
                                    <td className="px-8 py-4">{emp?.name}</td>
                                    <td className="px-8 py-4">{ENTRY_TYPE_LABELS[t.type]}</td>
-                                   <td className="px-8 py-4 font-mono">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
+                                   <td className="px-8 py-4 font-mono">{safeFormatDate(t.date)}</td>
                                    <td className="px-8 py-4 text-center">
                                       <button onClick={() => handleDeleteEntry(t.id, "Remover?")} className="text-rose-400 hover:text-rose-600 p-2"><Trash2 size={16}/></button>
                                    </td>
@@ -628,7 +642,7 @@ const App: React.FC = () => {
                               const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
                               return (
                                 <tr key={r.id} className="text-slate-600 hover:bg-slate-50 transition-colors">
-                                  <td className="px-6 py-4 font-mono">{new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
+                                  <td className="px-6 py-4 font-mono">{safeFormatDate(r.date)}</td>
                                   <td className="px-6 py-4">{emp?.name || '---'}</td>
                                   <td className="px-6 py-4 text-center font-mono">{formatTime(r.clockIn)} - {formatTime(r.clockOut)}</td>
                                   <td className={`px-6 py-4 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{tbe ? formatMinutes(tbe.minutes) : '---'}</td>
@@ -654,15 +668,44 @@ const App: React.FC = () => {
                           {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                         </select>
                         <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
-                        <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
+                        <div className="flex items-center gap-4">
+                           <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, isPositive: !adjustmentForm.isPositive})} className={`p-4 rounded-xl font-black text-2xl w-16 shadow-md transition-all ${adjustmentForm.isPositive ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                             {adjustmentForm.isPositive ? '+' : '-'}
+                           </button>
+                           <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="flex-1 p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-5xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
+                        </div>
                         <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all flex items-center justify-center gap-3">
                           {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar Ajuste
                         </button>
                       </form>
                     </div>
                   </div>
+                  <div className="lg:col-span-7 bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100">
+                    <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black font-serif italic">Histórico de Ajustes</h3> <History className="text-slate-300" size={24}/></div>
+                    <div className="space-y-3 overflow-y-auto max-h-[500px]">
+                       {data.timeBank.filter(t => ['WORK_RETRO', 'ADJUSTMENT', 'BONUS'].includes(t.type)).map(t => {
+                          const emp = data.employees.find(e => e.id === t.employeeId);
+                          return (
+                            <div key={t.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex justify-between items-center">
+                               <div>
+                                  <p className="font-black text-slate-800 text-xs">{emp?.name}</p>
+                                  <span className="text-[10px] text-slate-400">{safeFormatDate(t.date)}</span>
+                               </div>
+                               <div className="flex items-center gap-4">
+                                  <p className={`font-mono font-black ${t.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatMinutes(t.minutes)}</p>
+                                  <button onClick={() => handleDeleteEntry(t.id, "Remover?")} className="text-slate-300 hover:text-rose-500 transition-all"><Trash2 size={16}/></button>
+                               </div>
+                            </div>
+                          )
+                       })}
+                       {data.timeBank.filter(t => ['WORK_RETRO', 'ADJUSTMENT', 'BONUS'].includes(t.type)).length === 0 && (
+                         <div className="text-center py-10 text-slate-400 text-xs font-bold italic">Nenhum ajuste manual encontrado.</div>
+                       )}
+                    </div>
+                  </div>
                 </div>
               )}
+
             </div>
           )}
         </div>
