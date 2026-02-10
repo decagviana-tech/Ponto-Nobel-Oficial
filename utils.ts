@@ -24,20 +24,24 @@ export const getLocalDateString = (date: Date): string => {
 };
 
 /**
- * Gera uma string ISO respeitando o fuso horário local (sem o Z no final)
- * para evitar que o banco de dados desloque as horas.
+ * Gera uma string ISO completa com o Offset do fuso horário local.
+ * Isso impede que o Supabase/Postgres interprete o horário como UTC.
  */
 export const getLocalISOString = (date: Date): string => {
   const tzo = -date.getTimezoneOffset();
   const dif = tzo >= 0 ? '+' : '-';
   const pad = (num: number) => String(Math.floor(Math.abs(num))).padStart(2, '0');
   
-  return date.getFullYear() +
+  const isoWithoutOffset = date.getFullYear() +
     '-' + pad(date.getMonth() + 1) +
     '-' + pad(date.getDate()) +
     'T' + pad(date.getHours()) +
     ':' + pad(date.getMinutes()) +
     ':' + pad(date.getSeconds());
+    
+  const offset = dif + pad(tzo / 60) + ':' + pad(tzo % 60);
+  
+  return isoWithoutOffset + offset;
 };
 
 export const formatMinutes = (minutes: number): string => {
@@ -61,17 +65,19 @@ export const parseTimeStringToMinutes = (timeStr: string): number => {
   return isNegative ? -total : total;
 };
 
-/**
- * Formata uma string de data/hora ou hora pura para exibição.
- */
 export const formatTime = (dateString: string | null | undefined): string => {
   if (!dateString) return '--:--';
+  // Se for apenas HH:mm
   if (dateString.length === 5 && dateString.includes(':')) return dateString;
   
-  // Forçamos a leitura como data local se não houver indicador de fuso
-  const date = new Date(dateString.includes('T') ? dateString : dateString.replace(' ', 'T'));
+  const date = new Date(dateString);
   if (isNaN(date.getTime())) return '--:--';
-  return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  
+  return date.toLocaleTimeString('pt-BR', { 
+    hour: '2-digit', 
+    minute: '2-digit',
+    hour12: false 
+  });
 };
 
 export const getExpectedMinutesForDate = (employee: Employee, date: Date): number => {
@@ -86,7 +92,6 @@ export const getExpectedMinutesForDate = (employee: Employee, date: Date): numbe
 
 export const calculateWorkedMinutes = (record: ClockRecord, now: Date = new Date()): number => {
   if (!record.clockIn) return 0;
-  // Usamos Date sem o "Z" para garantir que o navegador trate como horário local
   const start = new Date(record.clockIn);
   const end = record.clockOut ? new Date(record.clockOut) : now;
   let totalMinutes = Math.floor((end.getTime() - start.getTime()) / (1000 * 60));

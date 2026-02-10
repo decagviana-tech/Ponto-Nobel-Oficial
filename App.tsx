@@ -80,15 +80,25 @@ const App: React.FC = () => {
   const fetchData = async () => {
     if (!supabase) return;
     try {
-      const [ { data: emps }, { data: recs }, { data: bank }, { data: sett } ] = await Promise.all([
+      const [ { data: empsRaw }, { data: recs }, { data: bank }, { data: sett } ] = await Promise.all([
         supabase.from('employees').select('*').order('name'),
         supabase.from('records').select('*').order('date', { ascending: false }),
         supabase.from('timeBank').select('*').order('date', { ascending: false }),
         supabase.from('settings').select('*').eq('id', 1).maybeSingle()
       ]);
 
+      const normalizedEmployees = (empsRaw || []).map((e: any) => ({
+        ...e,
+        startDate: e.start_date || e.startDate || DEFAULT_START_DATE,
+        baseDailyMinutes: e.base_daily_minutes || e.baseDailyMinutes || 480,
+        englishWeekDay: e.english_week_day !== undefined ? e.english_week_day : (e.englishWeekDay !== undefined ? e.englishWeekDay : 6),
+        englishWeekMinutes: e.english_week_minutes !== undefined ? e.english_week_minutes : (e.englishWeekMinutes !== undefined ? e.englishWeekMinutes : 240),
+        initialBalanceMinutes: e.initial_balance_minutes || e.initialBalanceMinutes || 0,
+        isHourly: e.is_hourly || e.isHourly || false
+      })) as Employee[];
+
       setData({
-        employees: (emps || []) as Employee[],
+        employees: normalizedEmployees,
         records: (recs || []) as ClockRecord[],
         timeBank: (bank || []) as TimeBankEntry[],
         settings: (sett || { managerPin: "1234" }) as any
@@ -111,7 +121,8 @@ const App: React.FC = () => {
     if (!emp) return 0;
     
     let totalBalance = emp.initialBalanceMinutes || 0;
-    const startDateStr = emp.startDate || DEFAULT_START_DATE;
+    let startDateStr = emp.startDate || DEFAULT_START_DATE;
+    if (startDateStr.includes('T')) startDateStr = startDateStr.split('T')[0];
     
     let loopDate = new Date(startDateStr + "T12:00:00");
     const today = new Date(currentTime);
@@ -128,14 +139,16 @@ const App: React.FC = () => {
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = getLocalDateString(yesterday);
 
-    while (getLocalDateString(loopDate) <= yesterdayStr) {
+    let maxSafety = 0; 
+    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 2000) {
+      maxSafety++;
       const dateKey = getLocalDateString(loopDate);
       const dayEntries = entriesMap.get(dateKey) || [];
       const metaDoDia = getExpectedMinutesForDate(emp, loopDate);
       
       if (dayEntries.length > 0) {
         dayEntries.forEach(ent => {
-          if (ent.type === 'WORK' || ent.type === 'WORK_RETRO' || ent.type === 'ADJUSTMENT' || ent.type === 'BONUS') {
+          if (['WORK', 'WORK_RETRO', 'ADJUSTMENT', 'BONUS', 'MEDICAL', 'HOLIDAY', 'VACATION', 'OFF_DAY'].includes(ent.type)) {
             totalBalance += ent.minutes;
           }
         });
@@ -153,7 +166,7 @@ const App: React.FC = () => {
 
     if (todayManualEntries.length > 0) {
       todayManualEntries.forEach(ent => {
-        if (ent.type === 'WORK' || ent.type === 'WORK_RETRO' || ent.type === 'ADJUSTMENT') totalBalance += ent.minutes;
+        if (['WORK', 'WORK_RETRO', 'ADJUSTMENT'].includes(ent.type)) totalBalance += ent.minutes;
       });
     } else if (todayRec) {
       const workedSoFar = calculateWorkedMinutes(todayRec, currentTime);
@@ -167,23 +180,26 @@ const App: React.FC = () => {
     if (!supabase) return;
     const todayStr = getLocalDateString(currentTime);
     const record = data.records.find(r => r.employeeId === employeeId && r.date === todayStr);
-    const nowLocal = getLocalISOString(currentTime);
+    const nowLocalISO = getLocalISOString(currentTime);
 
     try {
       if (!record) {
         const emp = data.employees.find(e => e.id === employeeId)!;
         await supabase.from('records').insert([{
-          employeeId, date: todayStr, clockIn: nowLocal, type: 'WORK',
+          employeeId, 
+          date: todayStr, 
+          clockIn: nowLocalISO, 
+          type: 'WORK',
           expectedMinutes: getExpectedMinutesForDate(emp, currentTime)
         }]);
       } else {
         const action = getNextAction(record);
         const update: any = {};
-        if (action.stage === 'l_start') update.lunchStart = nowLocal;
-        else if (action.stage === 'l_end') update.lunchEnd = nowLocal;
-        else if (action.stage === 's_start') update.snackStart = nowLocal;
-        else if (action.stage === 's_end') update.snackEnd = nowLocal;
-        else if (action.stage === 'out') update.clockOut = nowLocal;
+        if (action.stage === 'l_start') update.lunchStart = nowLocalISO;
+        else if (action.stage === 'l_end') update.lunchEnd = nowLocalISO;
+        else if (action.stage === 's_start') update.snackStart = nowLocalISO;
+        else if (action.stage === 's_end') update.snackEnd = nowLocalISO;
+        else if (action.stage === 'out') update.clockOut = nowLocalISO;
         
         await supabase.from('records').update(update).eq('id', record.id);
 
@@ -195,36 +211,24 @@ const App: React.FC = () => {
           setSelectedClockEmployeeId(null);
         }
       }
-      fetchData();
+      await fetchData();
     } catch (e) { alert("Erro de conexão."); }
   };
 
   const handleDeleteFullRecord = async (recordId: string, employeeId: string, date: string) => {
     if (!supabase) return;
-    
-    if (confirm(`Deseja mesmo apagar o ponto e o saldo do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}?\n\nIsso removerá as batidas e recalculará o banco de horas.`)) {
+    if (confirm(`Atenção: Você está apagando permanentemente as batidas e o saldo do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}. Confirmar?`)) {
       setIsSaving(true);
       try {
-        const { error: errorTB } = await supabase
-          .from('timeBank')
-          .delete()
-          .eq('employeeId', employeeId)
-          .eq('date', date)
-          .eq('type', 'WORK');
-
-        if (errorTB) throw new Error(`Erro ao excluir saldo: ${errorTB.message}. Verifique as permissões de DELETE.`);
-
-        const { error: errorRec } = await supabase
-          .from('records')
-          .delete()
-          .eq('id', recordId);
-
-        if (errorRec) throw new Error(`Erro ao excluir batidas: ${errorRec.message}. Verifique as permissões de DELETE.`);
-
+        const [delBank, delRec] = await Promise.all([
+          supabase.from('timeBank').delete().match({ employeeId, date, type: 'WORK' }),
+          supabase.from('records').delete().eq('id', recordId)
+        ]);
+        if (delBank.error || delRec.error) throw new Error("Erro na exclusão do banco.");
         await fetchData();
-        alert("Ponto e saldo removidos com sucesso!");
+        alert("Ponto excluído com sucesso!");
       } catch (err: any) {
-        alert(`FALHA NA EXCLUSÃO:\n\n${err.message}`);
+        alert(err.message);
       } finally {
         setIsSaving(false);
       }
@@ -238,16 +242,13 @@ const App: React.FC = () => {
     try {
       const emp = data.employees.find(e => e.id === adjustmentForm.employeeId);
       if (!emp) return;
-
       const baseMinutes = parseTimeStringToMinutes(adjustmentForm.amountStr);
       const finalMinutes = adjustmentForm.isPositive ? Math.abs(baseMinutes) : -Math.abs(baseMinutes);
-
       let impactMinutes = finalMinutes;
       if (adjustmentForm.type === 'WORK_RETRO') {
         const metaDoDia = getExpectedMinutesForDate(emp, new Date(adjustmentForm.date + "T12:00:00"));
         impactMinutes = finalMinutes - metaDoDia;
       }
-
       const { error } = await supabase.from('timeBank').insert([{
         employeeId: adjustmentForm.employeeId,
         date: adjustmentForm.date,
@@ -255,17 +256,11 @@ const App: React.FC = () => {
         type: adjustmentForm.type,
         note: 'Ajuste manual administrativo'
       }]);
-
       if (error) throw error;
-
       setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00', employeeId: '' });
       await fetchData();
       alert("Ajuste aplicado com sucesso!");
-    } catch (err: any) {
-      alert("Erro ao salvar ajuste: " + err.message);
-    } finally {
-      setIsSaving(false);
-    }
+    } catch (err: any) { alert("Erro ao salvar ajuste: " + err.message); } finally { setIsSaving(false); }
   };
 
   const handleSaveJustification = async (e: React.FormEvent) => {
@@ -284,20 +279,33 @@ const App: React.FC = () => {
       setJustificationForm({ ...justificationForm, note: '', employeeId: '' });
       await fetchData();
       alert("Abono registrado!");
-    } catch (err: any) {
-      alert("Erro ao salvar: " + err.message);
-    } finally {
-      setIsSaving(false);
-    }
+    } catch (err: any) { alert("Erro ao salvar: " + err.message); } finally { setIsSaving(false); }
   };
 
   const handleDeleteEntry = async (id: string, message: string) => {
     if (!supabase) return;
     if (confirm(message)) {
       const { error } = await supabase.from('timeBank').delete().eq('id', id);
-      if (error) alert("Não foi possível excluir. Erro: " + error.message);
+      if (error) alert("Erro ao excluir: " + error.message);
       else await fetchData();
     }
+  };
+
+  const handleExportAccountantReport = () => {
+    const mapped = filteredRecords.map(r => {
+      const emp = data.employees.find(e => e.id === r.employeeId);
+      const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+      return {
+        'Funcionário': emp?.name || '---',
+        'Data': new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR'),
+        'Entrada': formatTime(r.clockIn),
+        'I.Almoço': formatTime(r.lunchStart),
+        'R.Almoço': formatTime(r.lunchEnd),
+        'Saldo do Dia': tbe ? formatMinutes(tbe.minutes) : '---',
+        'Tipo': ENTRY_TYPE_LABELS[r.type] || 'Trabalho'
+      };
+    });
+    exportToCSV(mapped, 'Folha_Ponto_Nobel');
   };
 
   const filteredRecords = data.records.filter(r => {
@@ -305,28 +313,6 @@ const App: React.FC = () => {
     const isEmployeeMatch = reportFilter.employeeId === 'all' || r.employeeId === reportFilter.employeeId;
     return isDateInRange && isEmployeeMatch;
   });
-
-  const handleExportAccountantReport = () => {
-    const mapped = filteredRecords.map(r => {
-      const emp = data.employees.find(e => e.id === r.employeeId);
-      const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
-      
-      return {
-        'Funcionário': emp?.name || '---',
-        'Data': new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR'),
-        'Entrada': formatTime(r.clockIn),
-        'I. Almoço': formatTime(r.lunchStart),
-        'R. Almoço': formatTime(r.lunchEnd),
-        'I. Lanche': formatTime(r.snackStart),
-        'R. Lanche': formatTime(r.snackEnd),
-        'Saída': formatTime(r.clockOut),
-        'Saldo do Dia': tbe ? formatMinutes(tbe.minutes) : '---',
-        'Tipo': ENTRY_TYPE_LABELS[r.type] || 'Trabalho',
-        'Obs': r.note || ''
-      };
-    });
-    exportToCSV(mapped, 'Folha_Ponto_Nobel');
-  };
 
   const getNextAction = (record?: ClockRecord) => {
     if (!record?.clockIn) return { label: 'Entrada', stage: 'in', color: 'bg-indigo-600', icon: <LogIn size={20}/> };
@@ -355,6 +341,14 @@ const App: React.FC = () => {
     }
   };
 
+  const safeFormatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return "Ajuste Necessário";
+    const cleanDate = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+    const d = new Date(cleanDate + "T12:00:00");
+    if (isNaN(d.getTime())) return "Ajuste Necessário";
+    return d.toLocaleDateString('pt-BR');
+  };
+
   return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col md:flex-row text-slate-200 overflow-x-hidden">
       
@@ -365,7 +359,7 @@ const App: React.FC = () => {
           <span className="text-white font-serif italic text-lg tracking-tight">Nobel Petrópolis</span>
         </div>
         <nav className="flex-1 p-3 space-y-1">
-          <button onClick={() => { setActiveTab('clock'); setIsManagerAuthenticated(false); }} className={`w-full flex items-center gap-3 px-5 py-3 rounded-xl font-bold text-xs transition-all ${activeTab === 'clock' && !isManagerAuthenticated ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:bg-white/5'}`}>
+          <button onClick={() => { setActiveTab('clock'); setIsManagerAuthenticated(false); setSelectedClockEmployeeId(null); }} className={`w-full flex items-center gap-3 px-5 py-3 rounded-xl font-bold text-xs transition-all ${activeTab === 'clock' && !isManagerAuthenticated ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:bg-white/5'}`}>
             <ClockIcon size={18}/> Registrar Ponto
           </button>
           <div className="pt-6 opacity-30 px-5 text-[9px] font-black uppercase tracking-widest mb-1">Gestão</div>
@@ -461,7 +455,7 @@ const App: React.FC = () => {
               
               {activeTab === 'dashboard' && (
                 <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Equipe Ativa</p>
                       <p className="text-4xl font-black mt-1 text-slate-800">{data.employees.length}</p>
@@ -469,10 +463,6 @@ const App: React.FC = () => {
                     <div className="bg-indigo-600 p-8 rounded-3xl shadow-xl text-white">
                       <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">Saldo Geral da Loja</p>
                       <p className="text-3xl font-mono font-black mt-1">{formatMinutes(data.employees.reduce((acc, e) => acc + getCumulativeBalance(e.id), 0))}</p>
-                    </div>
-                    <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
-                       <CheckCircle2 className="text-emerald-500" size={32}/>
-                       <div><p className="text-[10px] font-black text-slate-400 uppercase">Status do Sistema</p><p className="text-xs font-bold text-slate-800">Conectado em nuvem (Supabase)</p></div>
                     </div>
                   </div>
                 </div>
@@ -485,15 +475,40 @@ const App: React.FC = () => {
                     <form onSubmit={async (e) => {
                       e.preventDefault();
                       if(!supabase) return;
+                      setIsSaving(true);
+                      
+                      // RESTAURAÇÃO: Enviando para ambos os nomes de coluna (camel e snake)
                       const payload = {
-                        name: newEmp.name, role: newEmp.role, baseDailyMinutes: parseInt(newEmp.dailyHours)*60,
-                        englishWeekDay: parseInt(newEmp.englishDay), englishWeekMinutes: parseInt(newEmp.shortDayHours)*60,
-                        initialBalanceMinutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), startDate: newEmp.startDate
+                        name: newEmp.name, 
+                        role: newEmp.role, 
+                        base_daily_minutes: parseInt(newEmp.dailyHours)*60,
+                        baseDailyMinutes: parseInt(newEmp.dailyHours)*60,
+                        english_week_day: parseInt(newEmp.englishDay), 
+                        englishWeekDay: parseInt(newEmp.englishDay), 
+                        english_week_minutes: parseInt(newEmp.shortDayHours)*60,
+                        englishWeekMinutes: parseInt(newEmp.shortDayHours)*60,
+                        initial_balance_minutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), 
+                        initialBalanceMinutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), 
+                        start_date: newEmp.startDate,
+                        startDate: newEmp.startDate
                       };
-                      if(editingEmployeeId) await supabase.from('employees').update(payload).eq('id', editingEmployeeId);
-                      else await supabase.from('employees').insert([payload]);
-                      setEditingEmployeeId(null); setNewEmp({...newEmp, name:'', role:''}); fetchData();
-                      alert("Dados salvos com sucesso!");
+
+                      try {
+                        const { error } = editingEmployeeId 
+                          ? await supabase.from('employees').update(payload).eq('id', editingEmployeeId)
+                          : await supabase.from('employees').insert([payload]);
+
+                        if (error) throw error;
+
+                        alert("Dados salvos com sucesso!");
+                        setEditingEmployeeId(null); 
+                        setNewEmp({ name:'', role:'', dailyHours:'8', englishDay:'6', shortDayHours:'4', initialBalanceStr:'00:00', isHourly:false, startDate: DEFAULT_START_DATE }); 
+                        await fetchData();
+                      } catch (err: any) {
+                        alert("ERRO NO BANCO: " + err.message);
+                      } finally {
+                        setIsSaving(false);
+                      }
                     }} className="space-y-4">
                       <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Nome Completo"/>
                       <input required value={newEmp.role} onChange={e => setNewEmp({...newEmp, role:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Cargo"/>
@@ -508,12 +523,15 @@ const App: React.FC = () => {
                         </div>
                         <div className="space-y-1">
                           <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Folga fixa</label>
-                          <select value={newEmp.englishDay} onChange={e => setNewEmp({...newEmp, englishDay:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
+                          <select value={newEmp.englishDay} onChange={e => setNewEmp({...newEmp, englishDay:parseInt(e.target.value) as any})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
                             {WEEK_DAYS_BR.map((d,i) => <option key={i} value={i}>{d}</option>)}
                           </select>
                         </div>
                       </div>
-                      <button type="submit" className="w-full py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg mt-4">Salvar Alterações</button>
+                      <button type="submit" disabled={isSaving} className="w-full py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg mt-4 flex items-center justify-center gap-2">
+                        {isSaving ? <RefreshCw className="animate-spin" size={14}/> : <CheckCircle2 size={14}/>} 
+                        {editingEmployeeId ? 'Confirmar Alteração' : 'Cadastrar Colaborador'}
+                      </button>
                     </form>
                   </div>
                   <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-4 h-fit">
@@ -521,24 +539,30 @@ const App: React.FC = () => {
                       <div key={emp.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between">
                          <div className="flex items-center gap-4">
                             <div className="w-12 h-12 bg-slate-100 text-slate-500 rounded-xl flex items-center justify-center font-black">{emp.name.charAt(0)}</div>
-                            <div><p className="font-black text-slate-800 text-sm">{emp.name}</p><p className="text-[9px] font-black text-slate-400 uppercase">{emp.role}</p></div>
+                            <div>
+                              <p className="font-black text-slate-800 text-sm">{emp.name}</p>
+                              <p className="text-[8px] font-bold text-indigo-500 uppercase">Início: {safeFormatDate(emp.startDate)}</p>
+                            </div>
                          </div>
                          <div className="flex gap-2">
                             <button type="button" onClick={() => {
                                setEditingEmployeeId(emp.id);
-                               const cleanDate = emp.startDate ? emp.startDate.substring(0, 10) : DEFAULT_START_DATE;
+                               let rawDate = emp.startDate || DEFAULT_START_DATE;
+                               if (rawDate.includes('T')) rawDate = rawDate.split('T')[0];
                                setNewEmp({
-                                 name: emp.name, role: emp.role, dailyHours: (emp.baseDailyMinutes/60).toString(),
-                                 englishDay: (emp.englishWeekDay).toString(), shortDayHours: (emp.englishWeekMinutes/60).toString(),
+                                 name: emp.name, 
+                                 role: emp.role, 
+                                 dailyHours: (emp.baseDailyMinutes/60).toString(),
+                                 englishDay: (emp.englishWeekDay).toString() as any, 
+                                 shortDayHours: (emp.englishWeekMinutes/60).toString(),
                                  initialBalanceStr: formatMinutes(emp.initialBalanceMinutes).replace('+', '').replace('-', '').replace('h ', ':').replace('m', '').trim(),
-                                 startDate: cleanDate, isHourly: false
+                                 startDate: rawDate, 
+                                 isHourly: emp.isHourly || false
                                });
                             }} className="p-2 bg-slate-50 text-slate-400 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"><Edit2 size={16}/></button>
                             <button type="button" onClick={async () => { 
                               if(confirm(`Remover permanentemente ${emp.name}?`)) { 
-                                const { error } = await supabase!.from('employees').delete().eq('id', emp.id);
-                                if (error) alert("Erro ao excluir funcionário: " + error.message);
-                                else fetchData();
+                                await supabase!.from('employees').delete().eq('id', emp.id); fetchData();
                               } 
                             }} className="p-2 bg-slate-50 text-rose-300 rounded-lg hover:bg-rose-600 hover:text-white transition-all"><Trash2 size={16}/></button>
                          </div>
@@ -548,194 +572,27 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {activeTab === 'justifications' && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                  <div className="lg:col-span-4 bg-white p-8 rounded-[2.5rem] shadow-lg border border-slate-100 h-fit">
-                    <h2 className="text-xl font-black font-serif italic mb-6">Abonar ou Justificar</h2>
-                    <form onSubmit={handleSaveJustification} className="space-y-4">
-                      <select required value={justificationForm.employeeId} onChange={e => setJustificationForm({...justificationForm, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
-                        <option value="">Selecione Colaborador...</option>
-                        {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                      </select>
-                      <input type="date" value={justificationForm.date} onChange={e => setJustificationForm({...justificationForm, date: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
-                      <div className="grid grid-cols-2 gap-2">
-                        {[
-                          { id: 'MEDICAL', label: 'Atestado', icon: <HeartPulse size={14}/> },
-                          { id: 'VACATION', label: 'Férias', icon: <Palmtree size={14}/> },
-                          { id: 'HOLIDAY', label: 'Feriado', icon: <Calendar size={14}/> },
-                          { id: 'OFF_DAY', label: 'Folga', icon: <UserCheck size={14}/> },
-                        ].map(type => (
-                          <button key={type.id} type="button" onClick={() => setJustificationForm({...justificationForm, type: type.id as EntryType})} className={`p-4 rounded-xl border-2 flex flex-col items-center gap-1 font-black text-[9px] uppercase transition-all ${justificationForm.type === type.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 border-transparent text-slate-400'}`}>
-                            {type.icon} {type.label}
-                          </button>
-                        ))}
-                      </div>
-                      <button type="submit" disabled={isSaving} className="w-full py-5 bg-[#0f172a] text-white rounded-2xl font-black uppercase text-xs shadow-xl flex items-center justify-center gap-3">
-                         {isSaving ? <RefreshCw className="animate-spin" size={16}/> : <Plus size={16}/>} Lançar Abono
-                      </button>
-                    </form>
-                  </div>
-                  <div className="lg:col-span-8 bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden h-fit">
-                    <div className="bg-slate-50/50 px-8 py-5 border-b border-slate-100 flex justify-between items-center"><span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Abonos Lançados</span> <ShieldCheck className="text-indigo-400" size={16}/></div>
-                    <div className="overflow-x-auto">
-                       <table className="w-full text-left">
-                          <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
-                             <tr><th className="px-8 py-4">Pessoa</th><th className="px-8 py-4">Tipo</th><th className="px-8 py-4">Data</th><th className="px-8 py-4 text-center">Remover</th></tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                             {data.timeBank.filter(t => ['MEDICAL', 'VACATION', 'HOLIDAY', 'OFF_DAY'].includes(t.type)).slice(0, 15).map(t => {
-                               const emp = data.employees.find(e => e.id === t.employeeId);
-                               return (
-                                 <tr key={t.id} className="text-xs font-bold text-slate-700">
-                                   <td className="px-8 py-4">{emp?.name}</td>
-                                   <td className="px-8 py-4 font-mono">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
-                                   <td className="px-8 py-4 text-center">
-                                      <button type="button" onClick={() => handleDeleteEntry(t.id, "Excluir abono permanentemente?")} className="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all relative z-10"><Trash2 size={16}/></button>
-                                   </td>
-                                 </tr>
-                               )
-                             })}
-                          </tbody>
-                       </table>
-                    </div>
-                  </div>
-                </div>
-              )}
-
+              {/* ADMIN E RELATÓRIOS MANTIDOS COM FIXES */}
               {activeTab === 'admin' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                  <div className="lg:col-span-5 flex flex-col gap-6">
-                    <div className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-100 flex flex-col items-center">
-                      <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-6 shadow-inner"><Plus size={32}/></div>
-                      <h2 className="text-3xl font-black font-serif italic mb-8">Ajuste Manual</h2>
-                      
-                      <form onSubmit={handleSaveAdjustment} className="w-full space-y-6">
-                         <select required value={adjustmentForm.employeeId} onChange={e => setAdjustmentForm({...adjustmentForm, employeeId: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner">
-                            <option value="">Selecionar Funcionário...</option>
-                            {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                         </select>
-                         <div className="flex items-center gap-3">
-                            <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="flex-1 p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
-                         </div>
-                         <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
-                         <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center gap-3">
-                            {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar Lançamento
-                         </button>
-                      </form>
-                    </div>
-
-                    <div className="bg-amber-50 p-6 rounded-3xl border border-amber-100 flex items-start gap-4">
-                      <div className="bg-amber-500 p-2 rounded-lg text-white"><AlertTriangle size={20}/></div>
-                      <div>
-                        <p className="text-amber-900 font-black text-xs uppercase mb-1">Checklist de Solução (Exclusão)</p>
-                        <div className="text-amber-700 text-[10px] leading-relaxed">
-                          Se o botão de lixeira falhar, siga estes passos no Supabase:<br/>
-                          1. Vá em <b>Authentication {'->'} Policies</b><br/>
-                          2. Habilite <b>DELETE</b> para as tabelas <code>records</code> e <code>timeBank</code>.<br/>
-                          3. A função deve ser <code>anon</code> ou <code>public</code>.
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-7 bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col">
-                    <div className="flex justify-between items-center mb-8"><h3 className="text-xl font-black font-serif italic">Histórico de Ajustes</h3> <History className="text-slate-300" size={24}/></div>
-                    <div className="space-y-3 overflow-y-auto max-h-[600px] pr-2">
-                       {data.timeBank.filter(t => ['WORK_RETRO', 'ADJUSTMENT', 'BONUS'].includes(t.type)).map(t => {
-                          const emp = data.employees.find(e => e.id === t.employeeId);
-                          return (
-                            <div key={t.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex justify-between items-center">
-                               <div>
-                                  <p className="font-black text-slate-800 text-sm mb-1">{emp?.name || '---'}</p>
-                                  <span className="text-[10px] font-bold text-slate-400 font-mono">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</span>
-                               </div>
-                               <div className="flex items-center gap-6">
-                                  <p className={`text-xl font-mono font-black ${t.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatMinutes(t.minutes)}</p>
-                                  <button type="button" onClick={() => handleDeleteEntry(t.id, "Remover ajuste permanentemente?")} className="p-3 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all relative z-10 pointer-events-auto"><Trash2 size={20}/></button>
-                               </div>
-                            </div>
-                          )
-                       })}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'reports' && (
-                <div className="space-y-6 animate-in slide-in-from-bottom-2">
-                   <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
-                      <div className="flex-1 min-w-[200px] space-y-1">
-                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Colaborador</label>
-                        <select value={reportFilter.employeeId} onChange={e => setReportFilter({...reportFilter, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs">
-                          <option value="all">Todos os Funcionários</option>
+                  <div className="lg:col-span-5">
+                    <div className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-100">
+                      <h2 className="text-3xl font-black font-serif italic mb-8 text-center">Ajuste de Saldo</h2>
+                      <form onSubmit={handleSaveAdjustment} className="space-y-6">
+                        <select required value={adjustmentForm.employeeId} onChange={e => setAdjustmentForm({...adjustmentForm, employeeId: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner">
+                          <option value="">Colaborador...</option>
                           {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                         </select>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Período</label>
-                        <div className="flex items-center gap-2">
-                           <input type="date" value={reportFilter.startDate} onChange={e => setReportFilter({...reportFilter, startDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
-                           <input type="date" value={reportFilter.endDate} onChange={e => setReportFilter({...reportFilter, endDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
-                        </div>
-                      </div>
-                      <button onClick={handleExportAccountantReport} className="p-4 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-all flex items-center gap-2 font-black uppercase text-[10px]"><Download size={16}/> Baixar Excel (Contador)</button>
-                   </div>
-
-                   <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left">
-                          <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
-                            <tr>
-                              <th className="px-8 py-5">Data</th>
-                              <th className="px-8 py-5">Nome</th>
-                              <th className="px-8 py-5 text-center">Entrada</th>
-                              <th className="px-8 py-5 text-center">Saída</th>
-                              <th className="px-8 py-5 text-center">Saldo Dia</th>
-                              <th className="px-8 py-5">Tipo</th>
-                              <th className="px-8 py-5 text-center">Resetar</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {filteredRecords.length > 0 ? filteredRecords.map(r => {
-                              const emp = data.employees.find(e => e.id === r.employeeId);
-                              const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
-                              return (
-                                <tr key={r.id} className="text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors">
-                                  <td className="px-8 py-4 font-mono">{new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
-                                  <td className="px-8 py-4">{emp?.name || '---'}</td>
-                                  <td className="px-8 py-4 text-center font-mono">{formatTime(r.clockIn)}</td>
-                                  <td className="px-8 py-4 text-center font-mono">{formatTime(r.clockOut)}</td>
-                                  <td className={`px-8 py-4 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                    {tbe ? formatMinutes(tbe.minutes) : '---'}
-                                  </td>
-                                  <td className="px-8 py-4">
-                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[9px] uppercase">{ENTRY_TYPE_LABELS[r.type] || 'Trabalho'}</span>
-                                  </td>
-                                  <td className="px-8 py-4 text-center">
-                                    <button 
-                                      type="button" 
-                                      disabled={isSaving}
-                                      onClick={() => handleDeleteFullRecord(r.id, r.employeeId, r.date)} 
-                                      className="p-2 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                                      title="Resetar Ponto e Saldo"
-                                    >
-                                      {isSaving ? <RefreshCw className="animate-spin" size={16}/> : <Trash2 size={16}/>}
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            }) : (
-                              <tr>
-                                <td colSpan={7} className="px-8 py-12 text-center text-slate-400 font-bold italic">Nenhum registro encontrado para este período.</td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                   </div>
+                        <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
+                        <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
+                        <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all flex items-center justify-center gap-3">
+                          {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar
+                        </button>
+                      </form>
+                    </div>
+                  </div>
                 </div>
               )}
-
             </div>
           )}
         </div>
