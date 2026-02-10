@@ -89,12 +89,12 @@ const App: React.FC = () => {
 
       const normalizedEmployees = (empsRaw || []).map((e: any) => ({
         ...e,
-        startDate: e.start_date || e.startDate || DEFAULT_START_DATE,
-        baseDailyMinutes: e.base_daily_minutes || e.baseDailyMinutes || 480,
-        englishWeekDay: e.english_week_day !== undefined ? e.english_week_day : (e.englishWeekDay !== undefined ? e.englishWeekDay : 6),
-        englishWeekMinutes: e.english_week_minutes !== undefined ? e.english_week_minutes : (e.englishWeekMinutes !== undefined ? e.englishWeekMinutes : 240),
-        initialBalanceMinutes: e.initial_balance_minutes || e.initialBalanceMinutes || 0,
-        isHourly: e.is_hourly || e.isHourly || false
+        startDate: e.startDate || e.start_date || DEFAULT_START_DATE,
+        baseDailyMinutes: e.baseDailyMinutes || e.base_daily_minutes || 480,
+        englishWeekDay: e.englishWeekDay !== undefined ? e.englishWeekDay : (e.english_week_day !== undefined ? e.english_week_day : 6),
+        englishWeekMinutes: e.englishWeekMinutes !== undefined ? e.englishWeekMinutes : (e.english_week_minutes !== undefined ? e.english_week_minutes : 240),
+        initialBalanceMinutes: e.initialBalanceMinutes || e.initial_balance_minutes || 0,
+        isHourly: e.isHourly || e.is_hourly || false
       })) as Employee[];
 
       setData({
@@ -140,7 +140,7 @@ const App: React.FC = () => {
     const yesterdayStr = getLocalDateString(yesterday);
 
     let maxSafety = 0; 
-    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 2000) {
+    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 3000) {
       maxSafety++;
       const dateKey = getLocalDateString(loopDate);
       const dayEntries = entriesMap.get(dateKey) || [];
@@ -180,7 +180,7 @@ const App: React.FC = () => {
     if (!supabase) return;
     const todayStr = getLocalDateString(currentTime);
     const record = data.records.find(r => r.employeeId === employeeId && r.date === todayStr);
-    const nowLocalISO = getLocalISOString(currentTime);
+    const nowISO = getLocalISOString(currentTime);
 
     try {
       if (!record) {
@@ -188,18 +188,18 @@ const App: React.FC = () => {
         await supabase.from('records').insert([{
           employeeId, 
           date: todayStr, 
-          clockIn: nowLocalISO, 
+          clockIn: nowISO, 
           type: 'WORK',
           expectedMinutes: getExpectedMinutesForDate(emp, currentTime)
         }]);
       } else {
         const action = getNextAction(record);
         const update: any = {};
-        if (action.stage === 'l_start') update.lunchStart = nowLocalISO;
-        else if (action.stage === 'l_end') update.lunchEnd = nowLocalISO;
-        else if (action.stage === 's_start') update.snackStart = nowLocalISO;
-        else if (action.stage === 's_end') update.snackEnd = nowLocalISO;
-        else if (action.stage === 'out') update.clockOut = nowLocalISO;
+        if (action.stage === 'l_start') update.lunchStart = nowISO;
+        else if (action.stage === 'l_end') update.lunchEnd = nowISO;
+        else if (action.stage === 's_start') update.snackStart = nowISO;
+        else if (action.stage === 's_end') update.snackEnd = nowISO;
+        else if (action.stage === 'out') update.clockOut = nowISO;
         
         await supabase.from('records').update(update).eq('id', record.id);
 
@@ -217,18 +217,20 @@ const App: React.FC = () => {
 
   const handleDeleteFullRecord = async (recordId: string, employeeId: string, date: string) => {
     if (!supabase) return;
-    if (confirm(`Atenção: Você está apagando permanentemente as batidas e o saldo do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}. Confirmar?`)) {
+    if (confirm(`Atenção: Isso apagará permanentemente as batidas do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}. Confirmar?`)) {
       setIsSaving(true);
       try {
-        const [delBank, delRec] = await Promise.all([
-          supabase.from('timeBank').delete().match({ employeeId, date, type: 'WORK' }),
-          supabase.from('records').delete().eq('id', recordId)
-        ]);
-        if (delBank.error || delRec.error) throw new Error("Erro na exclusão do banco.");
+        // Apagar do banco de horas primeiro
+        await supabase.from('timeBank').delete().match({ employeeId, date, type: 'WORK' });
+        // Depois apagar o registro físico das batidas
+        const { error } = await supabase.from('records').delete().eq('id', recordId);
+        
+        if (error) throw error;
+        
         await fetchData();
         alert("Ponto excluído com sucesso!");
       } catch (err: any) {
-        alert(err.message);
+        alert("Erro ao excluir registro: " + err.message);
       } finally {
         setIsSaving(false);
       }
@@ -339,14 +341,6 @@ const App: React.FC = () => {
         setTimeout(() => { setPinInput(''); setLoginError(false); }, 600);
       }
     }
-  };
-
-  const safeFormatDate = (dateStr: string | null | undefined) => {
-    if (!dateStr) return "Ajuste Necessário";
-    const cleanDate = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
-    const d = new Date(cleanDate + "T12:00:00");
-    if (isNaN(d.getTime())) return "Ajuste Necessário";
-    return d.toLocaleDateString('pt-BR');
   };
 
   return (
@@ -477,19 +471,14 @@ const App: React.FC = () => {
                       if(!supabase) return;
                       setIsSaving(true);
                       
-                      // RESTAURAÇÃO: Enviando para ambos os nomes de coluna (camel e snake)
+                      // USANDO APENAS camelCase - CONFIRMADO PELO ERRO DO BANCO
                       const payload = {
                         name: newEmp.name, 
                         role: newEmp.role, 
-                        base_daily_minutes: parseInt(newEmp.dailyHours)*60,
                         baseDailyMinutes: parseInt(newEmp.dailyHours)*60,
-                        english_week_day: parseInt(newEmp.englishDay), 
                         englishWeekDay: parseInt(newEmp.englishDay), 
-                        english_week_minutes: parseInt(newEmp.shortDayHours)*60,
                         englishWeekMinutes: parseInt(newEmp.shortDayHours)*60,
-                        initial_balance_minutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), 
                         initialBalanceMinutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), 
-                        start_date: newEmp.startDate,
                         startDate: newEmp.startDate
                       };
 
@@ -541,23 +530,18 @@ const App: React.FC = () => {
                             <div className="w-12 h-12 bg-slate-100 text-slate-500 rounded-xl flex items-center justify-center font-black">{emp.name.charAt(0)}</div>
                             <div>
                               <p className="font-black text-slate-800 text-sm">{emp.name}</p>
-                              <p className="text-[8px] font-bold text-indigo-500 uppercase">Início: {safeFormatDate(emp.startDate)}</p>
+                              <p className="text-[8px] font-bold text-indigo-500 uppercase">Início: {new Date(emp.startDate + "T12:00:00").toLocaleDateString('pt-BR')}</p>
                             </div>
                          </div>
                          <div className="flex gap-2">
                             <button type="button" onClick={() => {
                                setEditingEmployeeId(emp.id);
-                               let rawDate = emp.startDate || DEFAULT_START_DATE;
-                               if (rawDate.includes('T')) rawDate = rawDate.split('T')[0];
                                setNewEmp({
-                                 name: emp.name, 
-                                 role: emp.role, 
-                                 dailyHours: (emp.baseDailyMinutes/60).toString(),
-                                 englishDay: (emp.englishWeekDay).toString() as any, 
+                                 name: emp.name, role: emp.role, dailyHours: (emp.baseDailyMinutes/60).toString(),
+                                 englishDay: emp.englishWeekDay.toString() as any, 
                                  shortDayHours: (emp.englishWeekMinutes/60).toString(),
                                  initialBalanceStr: formatMinutes(emp.initialBalanceMinutes).replace('+', '').replace('-', '').replace('h ', ':').replace('m', '').trim(),
-                                 startDate: rawDate, 
-                                 isHourly: emp.isHourly || false
+                                 startDate: emp.startDate.split('T')[0], isHourly: emp.isHourly || false
                                });
                             }} className="p-2 bg-slate-50 text-slate-400 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"><Edit2 size={16}/></button>
                             <button type="button" onClick={async () => { 
@@ -572,7 +556,93 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {/* ADMIN E RELATÓRIOS MANTIDOS COM FIXES */}
+              {activeTab === 'justifications' && (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                  <div className="lg:col-span-4 bg-white p-8 rounded-[2.5rem] shadow-lg border border-slate-100 h-fit">
+                    <h2 className="text-xl font-black font-serif italic mb-6">Abonar ou Justificar</h2>
+                    <form onSubmit={handleSaveJustification} className="space-y-4">
+                      <select required value={justificationForm.employeeId} onChange={e => setJustificationForm({...justificationForm, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
+                        <option value="">Selecione Colaborador...</option>
+                        {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                      </select>
+                      <input type="date" value={justificationForm.date} onChange={e => setJustificationForm({...justificationForm, date: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          { id: 'MEDICAL', label: 'Atestado', icon: <HeartPulse size={14}/> },
+                          { id: 'VACATION', label: 'Férias', icon: <Palmtree size={14}/> },
+                          { id: 'HOLIDAY', label: 'Feriado', icon: <Calendar size={14}/> },
+                          { id: 'OFF_DAY', label: 'Folga', icon: <UserCheck size={14}/> },
+                        ].map(type => (
+                          <button key={type.id} type="button" onClick={() => setJustificationForm({...justificationForm, type: type.id as EntryType})} className={`p-4 rounded-xl border-2 flex flex-col items-center gap-1 font-black text-[9px] uppercase transition-all ${justificationForm.type === type.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 border-transparent text-slate-400'}`}>
+                            {type.icon} {type.label}
+                          </button>
+                        ))}
+                      </div>
+                      <button type="submit" disabled={isSaving} className="w-full py-5 bg-[#0f172a] text-white rounded-2xl font-black uppercase text-xs shadow-xl flex items-center justify-center gap-3">
+                         {isSaving ? <RefreshCw className="animate-spin" size={16}/> : <Plus size={16}/>} Lançar Abono
+                      </button>
+                    </form>
+                  </div>
+                  <div className="lg:col-span-8 bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden h-fit">
+                    <div className="bg-slate-50/50 px-8 py-5 border-b border-slate-100 flex justify-between items-center"><span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Histórico de Abonos</span> <ShieldCheck className="text-indigo-400" size={16}/></div>
+                    <div className="overflow-x-auto">
+                       <table className="w-full text-left text-xs font-bold">
+                          <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
+                             <tr><th className="px-8 py-4">Pessoa</th><th className="px-8 py-4">Tipo</th><th className="px-8 py-4">Data</th><th className="px-8 py-4 text-center">Ações</th></tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                             {data.timeBank.filter(t => ['MEDICAL', 'VACATION', 'HOLIDAY', 'OFF_DAY'].includes(t.type)).map(t => {
+                               const emp = data.employees.find(e => e.id === t.employeeId);
+                               return (
+                                 <tr key={t.id} className="text-slate-700">
+                                   <td className="px-8 py-4">{emp?.name}</td>
+                                   <td className="px-8 py-4">{ENTRY_TYPE_LABELS[t.type]}</td>
+                                   <td className="px-8 py-4 font-mono">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
+                                   <td className="px-8 py-4 text-center">
+                                      <button onClick={() => handleDeleteEntry(t.id, "Remover?")} className="text-rose-400 hover:text-rose-600 p-2"><Trash2 size={16}/></button>
+                                   </td>
+                                 </tr>
+                               )
+                             })}
+                          </tbody>
+                       </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'reports' && (
+                <div className="space-y-6">
+                   <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
+                      <div className="flex-1 min-w-[200px]"><label className="text-[9px] font-black text-slate-400 uppercase ml-2">Filtrar Pessoa</label><select value={reportFilter.employeeId} onChange={e => setReportFilter({...reportFilter, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"><option value="all">Todos</option>{data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
+                      <div className="flex gap-2"><input type="date" value={reportFilter.startDate} onChange={e => setReportFilter({...reportFilter, startDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/><input type="date" value={reportFilter.endDate} onChange={e => setReportFilter({...reportFilter, endDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/></div>
+                      <button onClick={handleExportAccountantReport} className="p-4 bg-indigo-600 text-white rounded-xl shadow-lg font-black uppercase text-[10px] flex items-center gap-2"><Download size={16}/> Exportar CSV</button>
+                   </div>
+                   <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs font-bold">
+                          <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400"><tr><th className="px-6 py-4">Data</th><th className="px-6 py-4">Colaborador</th><th className="px-6 py-4 text-center">Horário E/S</th><th className="px-6 py-4 text-center">Saldo Diário</th><th className="px-6 py-4 text-center">Excluir</th></tr></thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {filteredRecords.map(r => {
+                              const emp = data.employees.find(e => e.id === r.employeeId);
+                              const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+                              return (
+                                <tr key={r.id} className="text-slate-600 hover:bg-slate-50 transition-colors">
+                                  <td className="px-6 py-4 font-mono">{new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
+                                  <td className="px-6 py-4">{emp?.name || '---'}</td>
+                                  <td className="px-6 py-4 text-center font-mono">{formatTime(r.clockIn)} - {formatTime(r.clockOut)}</td>
+                                  <td className={`px-6 py-4 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{tbe ? formatMinutes(tbe.minutes) : '---'}</td>
+                                  <td className="px-6 py-4 text-center"><button onClick={() => handleDeleteFullRecord(r.id, r.employeeId, r.date)} className="p-2 text-rose-300 hover:text-rose-600"><Trash2 size={16}/></button></td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                   </div>
+                </div>
+              )}
+
               {activeTab === 'admin' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                   <div className="lg:col-span-5">
@@ -586,7 +656,7 @@ const App: React.FC = () => {
                         <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
                         <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
                         <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all flex items-center justify-center gap-3">
-                          {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar
+                          {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar Ajuste
                         </button>
                       </form>
                     </div>
@@ -602,7 +672,7 @@ const App: React.FC = () => {
       {isLoginModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 backdrop-blur-md">
            <div className="bg-white w-full max-w-[340px] p-10 rounded-[3rem] shadow-2xl relative text-center">
-              <button type="button" onClick={() => setIsLoginModalOpen(false)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900"><X size={24}/></button>
+              <button onClick={() => setIsLoginModalOpen(false)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900"><X size={24}/></button>
               <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner"><Lock size={32}/></div>
               <h2 className="text-2xl font-black font-serif italic mb-1">Acesso Gerente</h2>
               <div className="flex justify-center gap-4 my-8">
@@ -612,7 +682,7 @@ const App: React.FC = () => {
               </div>
               <div className="grid grid-cols-3 gap-3">
                 {['1','2','3','4','5','6','7','8','9','C','0','<'].map(v => (
-                  <button key={v} type="button" onClick={() => v === 'C' ? setPinInput('') : v === '<' ? setPinInput(p => p.slice(0,-1)) : handlePinDigit(v)} className="h-14 rounded-xl font-black text-xl bg-slate-50 hover:bg-indigo-600 hover:text-white transition-all">{v}</button>
+                  <button key={v} onClick={() => v === 'C' ? setPinInput('') : v === '<' ? setPinInput(p => p.slice(0,-1)) : handlePinDigit(v)} className="h-14 rounded-xl font-black text-xl bg-slate-50 hover:bg-indigo-600 hover:text-white transition-all">{v}</button>
                 ))}
               </div>
            </div>

@@ -25,7 +25,7 @@ export const getLocalDateString = (date: Date): string => {
 
 /**
  * Gera uma string ISO completa com o Offset do fuso horário local.
- * Isso impede que o Supabase/Postgres interprete o horário como UTC.
+ * Isso impede que o Supabase (Postgres) desloque o horário em -3h.
  */
 export const getLocalISOString = (date: Date): string => {
   const tzo = -date.getTimezoneOffset();
@@ -67,12 +67,13 @@ export const parseTimeStringToMinutes = (timeStr: string): number => {
 
 export const formatTime = (dateString: string | null | undefined): string => {
   if (!dateString) return '--:--';
-  // Se for apenas HH:mm
+  // Se já for apenas HH:mm
   if (dateString.length === 5 && dateString.includes(':')) return dateString;
   
   const date = new Date(dateString);
   if (isNaN(date.getTime())) return '--:--';
   
+  // Forçar o horário local na exibição
   return date.toLocaleTimeString('pt-BR', { 
     hour: '2-digit', 
     minute: '2-digit',
@@ -83,7 +84,7 @@ export const formatTime = (dateString: string | null | undefined): string => {
 export const getExpectedMinutesForDate = (employee: Employee, date: Date): number => {
   if (employee.isHourly) return 0; 
   const dayOfWeek = date.getDay();
-  if (dayOfWeek === 0) return 0; 
+  if (dayOfWeek === 0) return 0; // Domingo
   if (dayOfWeek === employee.englishWeekDay) {
     return employee.englishWeekMinutes || 240; 
   }
@@ -96,19 +97,15 @@ export const calculateWorkedMinutes = (record: ClockRecord, now: Date = new Date
   const end = record.clockOut ? new Date(record.clockOut) : now;
   let totalMinutes = Math.floor((end.getTime() - start.getTime()) / (1000 * 60));
 
-  if (record.lunchStart) {
-    const lStart = new Date(record.lunchStart);
-    const lEnd = record.lunchEnd ? new Date(record.lunchEnd) : (record.clockOut ? new Date(record.clockOut) : now);
-    const lunchDuration = Math.max(0, Math.floor((lEnd.getTime() - lStart.getTime()) / (1000 * 60)));
-    totalMinutes -= lunchDuration;
-  }
+  const subFromTotal = (sStr: string | null, eStr: string | null) => {
+    if (!sStr) return 0;
+    const s = new Date(sStr);
+    const e = eStr ? new Date(eStr) : (record.clockOut ? new Date(record.clockOut) : now);
+    return Math.max(0, Math.floor((e.getTime() - s.getTime()) / (1000 * 60)));
+  };
 
-  if (record.snackStart) {
-    const sStart = new Date(record.snackStart);
-    const sEnd = record.snackEnd ? new Date(record.snackEnd) : (record.clockOut ? new Date(record.clockOut) : now);
-    const snackDuration = Math.max(0, Math.floor((sEnd.getTime() - sStart.getTime()) / (1000 * 60)));
-    totalMinutes -= snackDuration;
-  }
+  totalMinutes -= subFromTotal(record.lunchStart, record.lunchEnd);
+  totalMinutes -= subFromTotal(record.snackStart, record.snackEnd);
 
   return Math.max(0, totalMinutes);
 };
