@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from "@google/genai";
-import { AppData, Employee, ClockRecord, TimeBankEntry, EntryType, WeekDay } from './types';
+import { AppData, Employee, ClockRecord, TimeBankEntry, EntryType } from './types';
 import { WEEK_DAYS_BR } from './constants';
 import { 
   formatMinutes, 
@@ -11,15 +11,17 @@ import {
   formatTime,
   parseTimeStringToMinutes,
   exportToCSV,
-  ENTRY_TYPE_LABELS
+  ENTRY_TYPE_LABELS,
+  getLocalDateString
 } from './utils';
 import { 
   Coffee, Utensils, LogIn, LogOut, ChevronLeft, Lock, 
   UserCheck, X, Clock as ClockIcon, 
   Edit2, Trash2, UserPlus, FileText, Download, 
   TrendingUp, Users, Settings, BookOpen, Sparkles, 
-  History, Plus, RefreshCw, Info, ClipboardCheck, Palmtree, Gift, Globe, Stethoscope,
-  CheckCircle2
+  Plus, RefreshCw, AlertCircle, CheckCircle2, Search,
+  Calendar, BrainCircuit, HeartPulse, Palmtree, ShieldCheck,
+  History, SlidersHorizontal, Info
 } from 'lucide-react';
 
 const SUPABASE_URL = "https://afpcoquiivzrckabcvzo.supabase.co" as string; 
@@ -44,48 +46,39 @@ const App: React.FC = () => {
   const [pinInput, setPinInput] = useState('');
   const [loginError, setLoginError] = useState(false);
   const [isLoading, setIsLoading] = useState(isConfigured);
-  const [isConnected, setIsConnected] = useState(false);
-  const [aiInsights, setAiInsights] = useState<string | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [editingEmployeeId, setEditingEmployeeId] = useState<string | null>(null);
-  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-  const [idAwaitingDelete, setIdAwaitingDelete] = useState<string | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  const DEFAULT_START_DATE = '2026-02-01';
+  const DEFAULT_START_DATE = getLocalDateString(new Date());
 
+  // Estados dos formulários
   const [newEmp, setNewEmp] = useState({ 
-    name: '', role: '', dailyHours: '8', englishDay: '6', shortDayHours: '0', initialBalanceStr: '00:00', isHourly: false, startDate: DEFAULT_START_DATE
+    name: '', role: '', dailyHours: '8', englishDay: '6', shortDayHours: '4', initialBalanceStr: '00:00', isHourly: false, startDate: DEFAULT_START_DATE
+  });
+
+  const [adjustmentForm, setAdjustmentForm] = useState({
+    employeeId: '',
+    date: getLocalDateString(new Date()),
+    amountStr: '00:00',
+    type: 'WORK_RETRO' as EntryType,
+    isPositive: true
   });
 
   const [justificationForm, setJustificationForm] = useState({
     employeeId: '',
+    date: getLocalDateString(new Date()),
     type: 'MEDICAL' as EntryType,
-    startDate: new Date().toISOString().split('T')[0],
-    endDate: new Date().toISOString().split('T')[0],
     note: ''
   });
-  
-  const [retroForm, setRetroForm] = useState({
-    employeeId: '',
-    date: new Date().toISOString().split('T')[0],
-    amountStr: '00:00',
-    type: 'WORK_RETRO' as EntryType,
-    note: '',
-    isPositive: true
+
+  const [reportFilter, setReportFilter] = useState({
+    startDate: getLocalDateString(new Date(new Date().getFullYear(), new Date().getMonth(), 1)),
+    endDate: getLocalDateString(new Date()),
+    employeeId: 'all'
   });
 
-  const [isSubmittingJustification, setIsSubmittingJustification] = useState(false);
-  const [newPin, setNewPin] = useState('');
-
   const fetchData = async () => {
-    if (!supabase) {
-      const saved = localStorage.getItem('nobel_data_v2');
-      if (saved) setData(JSON.parse(saved));
-      setIsLoading(false);
-      return;
-    }
-
+    if (!supabase) return;
     try {
       const [ { data: emps }, { data: recs }, { data: bank }, { data: sett } ] = await Promise.all([
         supabase.from('employees').select('*').order('name'),
@@ -94,18 +87,14 @@ const App: React.FC = () => {
         supabase.from('settings').select('*').eq('id', 1).maybeSingle()
       ]);
 
-      const freshData = {
+      setData({
         employees: (emps || []) as Employee[],
         records: (recs || []) as ClockRecord[],
         timeBank: (bank || []) as TimeBankEntry[],
         settings: (sett || { managerPin: "1234" }) as any
-      };
-      
-      setData(freshData);
-      localStorage.setItem('nobel_data_v2', JSON.stringify(freshData));
-      setIsConnected(true);
+      });
     } catch (err) {
-      setIsConnected(false);
+      console.error("Erro ao buscar dados", err);
     } finally {
       setIsLoading(false);
     }
@@ -113,16 +102,6 @@ const App: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-    if (supabase) {
-      const channel = supabase
-        .channel('changes')
-        .on('postgres_changes', { event: '*', schema: 'public' }, () => fetchData())
-        .subscribe();
-      return () => { supabase.removeChannel(channel); };
-    }
-  }, [supabase]);
-
-  useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -131,70 +110,63 @@ const App: React.FC = () => {
     const emp = data.employees.find(e => e.id === empId);
     if (!emp) return 0;
     
-    let balance = emp.initialBalanceMinutes || 0;
-    const startStr = emp.startDate ? emp.startDate.split('T')[0] : DEFAULT_START_DATE;
-    const startDate = new Date(startStr + "T00:00:00");
+    let totalBalance = emp.initialBalanceMinutes || 0;
+    const startDateStr = emp.startDate || DEFAULT_START_DATE;
     
-    const yesterday = new Date(currentTime);
-    yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(23, 59, 59);
-
-    if (!emp.isHourly) {
-      let curr = new Date(startDate);
-      while (curr <= yesterday) {
-        balance -= getExpectedMinutesForDate(emp, curr);
-        curr.setDate(curr.getDate() + 1);
-      }
-    }
-
-    const entries = data.timeBank.filter(t => t.employeeId === empId);
-    entries.forEach(ent => {
-      const entDate = new Date(ent.date + "T00:00:00");
-      if (entDate < startDate) return;
-
-      if (ent.type === 'WORK' || ent.type === 'WORK_RETRO') {
-        balance += (ent.minutes + getExpectedMinutesForDate(emp, entDate));
-      } else {
-        balance += ent.minutes;
-      }
+    let loopDate = new Date(startDateStr + "T12:00:00");
+    const today = new Date(currentTime);
+    today.setHours(0,0,0,0);
+    
+    const entriesMap = new Map<string, TimeBankEntry[]>();
+    data.timeBank.filter(t => t.employeeId === empId).forEach(t => {
+      const list = entriesMap.get(t.date) || [];
+      list.push(t);
+      entriesMap.set(t.date, list);
     });
 
-    const todayStr = currentTime.toISOString().split('T')[0];
-    const activeRec = data.records.find(r => r.employeeId === empId && r.date === todayStr);
-    const hasFinalizedWorkToday = entries.some(t => t.date === todayStr && (t.type === 'WORK' || t.type === 'WORK_RETRO'));
-    
-    if (activeRec && !hasFinalizedWorkToday) {
-      const workedSoFar = calculateWorkedMinutes(activeRec, currentTime);
-      balance += (workedSoFar - activeRec.expectedMinutes);
-    }
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = getLocalDateString(yesterday);
 
-    return balance;
-  };
-
-  const handlePinDigit = (digit: string) => {
-    if (pinInput.length < 4) {
-      const currentPin = data.settings?.managerPin || "1234";
-      const nextPin = pinInput + digit;
-      setPinInput(nextPin);
-      if (nextPin === currentPin) {
-        setTimeout(() => {
-          setIsManagerAuthenticated(true);
-          setIsLoginModalOpen(false);
-          setPinInput('');
-          setActiveTab('dashboard');
-        }, 300);
-      } else if (nextPin.length === 4) {
-        setLoginError(true);
-        setTimeout(() => { setPinInput(''); setLoginError(false); }, 600);
+    while (getLocalDateString(loopDate) <= yesterdayStr) {
+      const dateKey = getLocalDateString(loopDate);
+      const dayEntries = entriesMap.get(dateKey) || [];
+      const metaDoDia = getExpectedMinutesForDate(emp, loopDate);
+      
+      if (dayEntries.length > 0) {
+        dayEntries.forEach(ent => {
+          if (ent.type === 'WORK' || ent.type === 'WORK_RETRO' || ent.type === 'ADJUSTMENT' || ent.type === 'BONUS') {
+            totalBalance += ent.minutes;
+          }
+        });
+      } else {
+        if (!emp.isHourly && metaDoDia > 0) {
+          totalBalance -= metaDoDia;
+        }
       }
+      loopDate.setDate(loopDate.getDate() + 1);
     }
+
+    const todayStr = getLocalDateString(currentTime);
+    const todayRec = data.records.find(r => r.employeeId === empId && r.date === todayStr);
+    const todayManualEntries = entriesMap.get(todayStr) || [];
+
+    if (todayManualEntries.length > 0) {
+      todayManualEntries.forEach(ent => {
+        if (ent.type === 'WORK' || ent.type === 'WORK_RETRO' || ent.type === 'ADJUSTMENT') totalBalance += ent.minutes;
+      });
+    } else if (todayRec) {
+      const workedSoFar = calculateWorkedMinutes(todayRec, currentTime);
+      totalBalance += (workedSoFar - todayRec.expectedMinutes);
+    }
+
+    return totalBalance;
   };
 
   const handleClockAction = async (employeeId: string) => {
     if (!supabase) return;
-    const todayStr = currentTime.toISOString().split('T')[0];
+    const todayStr = getLocalDateString(currentTime);
     const record = data.records.find(r => r.employeeId === employeeId && r.date === todayStr);
-    const action = getNextAction(record);
     const nowISO = currentTime.toISOString();
 
     try {
@@ -205,6 +177,7 @@ const App: React.FC = () => {
           expectedMinutes: getExpectedMinutesForDate(emp, currentTime)
         }]);
       } else {
+        const action = getNextAction(record);
         const update: any = {};
         if (action.stage === 'l_start') update.lunchStart = nowISO;
         else if (action.stage === 'l_end') update.lunchEnd = nowISO;
@@ -223,252 +196,225 @@ const App: React.FC = () => {
         }
       }
       fetchData();
-    } catch (e) {
-      alert("Erro de conexão.");
-    }
+    } catch (e) { alert("Erro de conexão."); }
   };
 
-  const handleDeleteTimeBankEntry = async (id: string) => {
-    if (!supabase || isDeleting) return;
-    if (idAwaitingDelete !== id) {
-      setIdAwaitingDelete(id);
-      setTimeout(() => setIdAwaitingDelete(prev => prev === id ? null : prev), 3500);
-      return;
-    }
-    setIsDeleting(true);
-    try {
-      const { error } = await supabase.from('timeBank').delete().eq('id', id);
-      if (error) throw error;
-      fetchData();
-    } catch (e) { 
-      alert("Erro ao excluir.");
-      fetchData();
-    } finally {
-      setIsDeleting(false);
-      setIdAwaitingDelete(null);
-    }
-  };
-
-  const handleRetroAdjust = async (e: React.FormEvent) => {
+  const handleSaveAdjustment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || !retroForm.employeeId) return;
+    if (!supabase || !adjustmentForm.employeeId) return;
+    setIsSaving(true);
     try {
-      const mins = parseTimeStringToMinutes(retroForm.amountStr);
-      let finalMins = retroForm.isPositive ? Math.abs(mins) : -Math.abs(mins);
-      
-      if (retroForm.type === 'WORK_RETRO') {
-        const emp = data.employees.find(ev => ev.id === retroForm.employeeId)!;
-        const targetDate = new Date(retroForm.date + "T12:00:00");
-        const meta = getExpectedMinutesForDate(emp, targetDate);
-        // Salvamos a diferença (saldo) no banco, mas mostraremos o total na UI
-        finalMins = mins - meta;
+      const emp = data.employees.find(e => e.id === adjustmentForm.employeeId);
+      if (!emp) return;
+
+      const baseMinutes = parseTimeStringToMinutes(adjustmentForm.amountStr);
+      const finalMinutes = adjustmentForm.isPositive ? Math.abs(baseMinutes) : -Math.abs(baseMinutes);
+
+      let impactMinutes = finalMinutes;
+      if (adjustmentForm.type === 'WORK_RETRO') {
+        const metaDoDia = getExpectedMinutesForDate(emp, new Date(adjustmentForm.date + "T12:00:00"));
+        impactMinutes = finalMinutes - metaDoDia;
       }
 
-      const { error } = await supabase.from('timeBank').insert([{
-        employeeId: retroForm.employeeId,
-        date: retroForm.date,
-        minutes: finalMins,
-        type: retroForm.type,
-        note: retroForm.note || `Lançamento: ${ENTRY_TYPE_LABELS[retroForm.type]}`
+      await supabase.from('timeBank').insert([{
+        employeeId: adjustmentForm.employeeId,
+        date: adjustmentForm.date,
+        minutes: impactMinutes,
+        type: adjustmentForm.type,
+        note: 'Ajuste manual administrativo'
       }]);
-      if (error) throw error;
-      setRetroForm({ ...retroForm, amountStr: '00:00', note: '' });
+
+      setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00', employeeId: '' });
       fetchData();
-      alert("Lançamento salvo com sucesso!");
+      alert("Ajuste aplicado com sucesso!");
     } catch (err) {
-      alert("Erro ao salvar.");
+      alert("Erro ao salvar ajuste.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const fillStandardShift = () => {
-    const emp = data.employees.find(e => e.id === retroForm.employeeId);
-    if (!emp) {
-      alert("Selecione um funcionário primeiro.");
-      return;
-    }
-    const selectedDate = new Date(retroForm.date + "T12:00:00");
-    const expected = getExpectedMinutesForDate(emp, selectedDate);
-    const h = Math.floor(expected / 60);
-    const m = expected % 60;
-    setRetroForm({ ...retroForm, amountStr: `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`, type: 'WORK_RETRO' });
-  };
-
-  const handleJustificationSubmit = async (e: React.FormEvent) => {
+  const handleSaveJustification = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabase || !justificationForm.employeeId) return;
-    setIsSubmittingJustification(true);
+    setIsSaving(true);
     try {
-      const emp = data.employees.find(e => e.id === justificationForm.employeeId);
-      if (!emp) return;
-      const start = new Date(justificationForm.startDate + "T00:00:00");
-      const end = new Date(justificationForm.endDate + "T00:00:00");
-      const newEntries = [];
-      let curr = new Date(start);
-      while (curr <= end) {
-        const expected = getExpectedMinutesForDate(emp, curr);
-        if (expected > 0) {
-          newEntries.push({
-            employeeId: justificationForm.employeeId,
-            date: curr.toISOString().split('T')[0],
-            minutes: expected,
-            type: justificationForm.type,
-            note: justificationForm.note || `Abono: ${ENTRY_TYPE_LABELS[justificationForm.type]}`
-          });
-        }
-        curr.setDate(curr.getDate() + 1);
-      }
-      if (newEntries.length > 0) await supabase.from('timeBank').insert(newEntries);
-      setJustificationForm({ ...justificationForm, note: '' });
+      await supabase.from('timeBank').insert([{
+        employeeId: justificationForm.employeeId,
+        date: justificationForm.date,
+        minutes: 0, 
+        type: justificationForm.type,
+        note: justificationForm.note
+      }]);
+      setJustificationForm({ ...justificationForm, note: '', employeeId: '' });
       fetchData();
       alert("Abono registrado!");
     } catch (err) {
-      alert("Erro ao registrar.");
+      alert("Erro ao salvar.");
     } finally {
-      setIsSubmittingJustification(false);
+      setIsSaving(false);
     }
+  };
+
+  const handleDeleteEntry = async (id: string, message: string) => {
+    if (!supabase) return;
+    if (confirm(message)) {
+      const { error } = await supabase.from('timeBank').delete().eq('id', id);
+      if (error) {
+        alert("Erro ao excluir registro: " + error.message);
+      } else {
+        fetchData();
+      }
+    }
+  };
+
+  const handleExportAccountantReport = () => {
+    const mapped = filteredRecords.map(r => {
+      const emp = data.employees.find(e => e.id === r.employeeId);
+      const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+      
+      return {
+        'Funcionário': emp?.name || '---',
+        'Data': new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR'),
+        'Entrada': formatTime(r.clockIn),
+        'Almoço': `${formatTime(r.lunchStart)} - ${formatTime(r.lunchEnd)}`,
+        'Lanche': `${formatTime(r.snackStart)} - ${formatTime(r.snackEnd)}`,
+        'Saída': formatTime(r.clockOut),
+        'Saldo do Dia': tbe ? formatMinutes(tbe.minutes) : '---',
+        'Tipo': ENTRY_TYPE_LABELS[r.type] || 'Comum',
+        'Observação': r.note || ''
+      };
+    });
+
+    exportToCSV(mapped, 'Relatorio_Folha_Nobel');
   };
 
   const getNextAction = (record?: ClockRecord) => {
     if (!record?.clockIn) return { label: 'Entrada', stage: 'in', color: 'bg-indigo-600', icon: <LogIn size={20}/> };
-    if (!record.lunchStart) return { label: 'Almoço', stage: 'l_start', color: 'bg-amber-600', icon: <Utensils size={20}/> };
+    if (!record.lunchStart) return { label: 'Início Almoço', stage: 'l_start', color: 'bg-amber-600', icon: <Utensils size={20}/> };
     if (!record.lunchEnd) return { label: 'Retorno Almoço', stage: 'l_end', color: 'bg-emerald-600', icon: <Utensils size={20}/> };
-    if (!record.snackStart) return { label: 'Lanche', stage: 's_start', color: 'bg-orange-500', icon: <Coffee size={20}/> };
-    if (!record.snackEnd) return { label: 'Retorno Lanche', stage: 's_end', color: 'bg-emerald-600', icon: <Coffee size={20}/> };
-    if (!record.clockOut) return { label: 'Encerrar Dia', stage: 'out', color: 'bg-rose-600', icon: <LogOut size={20}/> };
+    if (!record.snackStart) return { label: 'Início Lanche', stage: 's_start', color: 'bg-orange-500', icon: <Coffee size={20}/> };
+    if (!record.snackEnd) return { label: 'Retorno Lanche', stage: 's_end', color: 'bg-teal-600', icon: <Coffee size={20}/> };
+    if (!record.clockOut) return { label: 'Saída Final', stage: 'out', color: 'bg-rose-600', icon: <LogOut size={20}/> };
     return { label: 'Finalizado', stage: 'done', color: 'bg-slate-800', icon: <UserCheck size={20}/> };
   };
 
-  const handleEditEmployee = (emp: Employee) => {
-    setEditingEmployeeId(emp.id);
-    const absMins = Math.abs(emp.initialBalanceMinutes || 0);
-    const h = Math.floor(absMins / 60);
-    const m = absMins % 60;
-    const sign = (emp.initialBalanceMinutes || 0) < 0 ? '-' : '';
-    setNewEmp({
-      name: emp.name,
-      role: emp.role,
-      dailyHours: ((emp.baseDailyMinutes || 480) / 60).toString(),
-      englishDay: (emp.englishWeekDay ?? 6).toString(),
-      shortDayHours: ((emp.englishWeekMinutes || 0) / 60).toString(),
-      initialBalanceStr: `${sign}${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`,
-      isHourly: emp.isHourly || false,
-      startDate: emp.startDate ? emp.startDate.split('T')[0] : DEFAULT_START_DATE
-    });
+  const handlePinDigit = (digit: string) => {
+    if (pinInput.length < 4) {
+      const currentPin = data.settings?.managerPin || "1234";
+      const nextPin = pinInput + digit;
+      setPinInput(nextPin);
+      if (nextPin === currentPin) {
+        setIsManagerAuthenticated(true);
+        setIsLoginModalOpen(false);
+        setPinInput('');
+        setActiveTab('dashboard');
+      } else if (nextPin.length === 4) {
+        setLoginError(true);
+        setTimeout(() => { setPinInput(''); setLoginError(false); }, 600);
+      }
+    }
   };
 
+  const filteredRecords = data.records.filter(r => {
+    const isDateInRange = r.date >= reportFilter.startDate && r.date <= reportFilter.endDate;
+    const isEmployeeMatch = reportFilter.employeeId === 'all' || r.employeeId === reportFilter.employeeId;
+    return isDateInRange && isEmployeeMatch;
+  });
+
   return (
-    <div className="min-h-screen bg-[#0f172a] flex flex-col md:flex-row font-sans text-slate-200">
+    <div className="min-h-screen bg-[#0f172a] flex flex-col md:flex-row text-slate-200 overflow-x-hidden">
       
-      <aside className="w-full md:w-64 bg-[#1e293b] flex flex-col shadow-2xl border-r border-white/5 md:fixed md:inset-y-0 z-50">
-        <div className="p-8 flex flex-col items-center gap-4 border-b border-white/5">
-          <div className="bg-indigo-600 p-3 rounded-2xl text-white shadow-xl rotate-3"><BookOpen size={28}/></div>
-          <div className="text-center">
-            <span className="text-white font-black text-xl tracking-tighter block font-serif">Nobel Ponto</span>
-            <span className="text-indigo-400 text-[10px] font-black uppercase tracking-[0.3em] block mt-1">Petrópolis</span>
-          </div>
+      {/* SIDEBAR */}
+      <aside className="w-full md:w-64 bg-[#1e293b] flex flex-col shadow-2xl md:fixed md:inset-y-0 z-50 overflow-y-auto">
+        <div className="p-6 border-b border-white/5 flex flex-col items-center">
+          <div className="bg-indigo-600 p-2.5 rounded-xl text-white shadow-xl mb-3"><BookOpen size={24}/></div>
+          <span className="text-white font-serif italic text-lg tracking-tight">Nobel Petrópolis</span>
         </div>
-
-        <nav className="flex-1 px-4 py-8 space-y-2 overflow-y-auto">
-          <button onClick={() => { setActiveTab('clock'); setSelectedClockEmployeeId(null); setIsManagerAuthenticated(false); }} className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl transition-all font-bold text-sm ${activeTab === 'clock' && !isManagerAuthenticated ? 'bg-white text-slate-900 shadow-xl scale-105' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
-            <ClockIcon size={20} /> <span>Registrar Ponto</span>
+        <nav className="flex-1 p-3 space-y-1">
+          <button onClick={() => { setActiveTab('clock'); setIsManagerAuthenticated(false); }} className={`w-full flex items-center gap-3 px-5 py-3 rounded-xl font-bold text-xs transition-all ${activeTab === 'clock' && !isManagerAuthenticated ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:bg-white/5'}`}>
+            <ClockIcon size={18}/> Registrar Ponto
           </button>
-          
-          <div className="pt-10 pb-4">
-             <p className="px-6 text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">Gerente</p>
-             {[
-               { id: 'dashboard', label: 'Painel', icon: <TrendingUp size={20}/> },
-               { id: 'employees', label: 'Equipe', icon: <Users size={20}/> },
-               { id: 'justifications', label: 'Justificativas', icon: <ClipboardCheck size={20}/> },
-               { id: 'reports', label: 'Relatórios', icon: <FileText size={20}/> },
-               { id: 'admin', label: 'Ajustes', icon: <Settings size={20}/> },
-             ].map(item => (
-               <button key={item.id} onClick={() => isManagerAuthenticated ? setActiveTab(item.id) : setIsLoginModalOpen(true)} className={`w-full flex items-center gap-4 px-6 py-3.5 rounded-2xl transition-all font-bold text-sm mb-1 ${activeTab === item.id && isManagerAuthenticated ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}>
-                 {item.icon} <span>{item.label}</span>
-               </button>
-             ))}
-          </div>
+          <div className="pt-6 opacity-30 px-5 text-[9px] font-black uppercase tracking-widest mb-1">Gestão</div>
+          {[
+            { id: 'dashboard', label: 'Painel Geral', icon: <TrendingUp size={18}/> },
+            { id: 'employees', label: 'Equipe', icon: <Users size={18}/> },
+            { id: 'justifications', label: 'Justificativas', icon: <ShieldCheck size={18}/> },
+            { id: 'admin', label: 'Ajustes', icon: <SlidersHorizontal size={18}/> },
+            { id: 'reports', label: 'Relatórios', icon: <FileText size={18}/> },
+          ].map(item => (
+            <button key={item.id} onClick={() => isManagerAuthenticated ? setActiveTab(item.id) : setIsLoginModalOpen(true)} className={`w-full flex items-center gap-3 px-5 py-3 rounded-xl font-bold text-xs transition-all ${activeTab === item.id && isManagerAuthenticated ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-white/5'}`}>
+              {item.icon} {item.label}
+            </button>
+          ))}
         </nav>
-
-        <div className="p-6 border-t border-white/5">
-           <div className={`flex items-center gap-3 px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest ${isConnected ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 shadow-[0_0_8px_emerald]' : 'bg-rose-500 animate-pulse'}`}></div>
-              <span>{isConnected ? 'Em Nuvem' : 'Offline'}</span>
-           </div>
-        </div>
       </aside>
 
-      <main className="flex-1 p-6 md:p-12 md:ml-64 bg-slate-50 text-slate-900 min-h-screen overflow-y-auto">
-        <header className="mb-12 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
-          <div className="space-y-1">
-            <h1 className="text-4xl font-black tracking-tighter text-slate-900 font-serif italic lowercase first-letter:capitalize">
-               {activeTab === 'clock' ? 'olá, bom dia' : activeTab === 'justifications' ? 'justificativas' : activeTab === 'reports' ? 'relatórios' : activeTab === 'dashboard' ? 'painel' : activeTab === 'admin' ? 'ajustes' : activeTab === 'employees' ? 'equipe' : activeTab}
-            </h1>
-            <p className="text-slate-400 font-bold text-xs uppercase tracking-widest">Livraria Nobel Petrópolis</p>
+      {/* MAIN CONTENT */}
+      <main className="flex-1 p-6 md:p-10 md:ml-64 bg-slate-50 text-slate-900 min-h-screen">
+        <header className="mb-10 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
+          <div>
+            <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-1">Nobel Petrópolis</p>
+            <h1 className="text-3xl font-black font-serif italic capitalize leading-none">{activeTab}</h1>
           </div>
-          <div className="bg-white px-8 py-5 rounded-[2.5rem] shadow-xl border border-slate-100 flex flex-col items-end min-w-[200px]">
-              <p className="text-3xl font-mono font-black text-slate-800 leading-none">{currentTime.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</p>
-              <p className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] mt-2">{currentTime.toLocaleDateString('pt-BR', {weekday: 'short', day:'2-digit', month:'short'}).replace('.','')}</p>
+          <div className="bg-white px-6 py-3 rounded-2xl shadow-sm border border-slate-100 text-right w-full sm:w-auto">
+            <p className="text-xl font-mono font-black text-slate-800 leading-none">{currentTime.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</p>
+            <p className="text-[9px] font-black text-indigo-500 uppercase mt-1">{currentTime.toLocaleDateString('pt-BR', {weekday:'short', day:'2-digit', month:'short'})}</p>
           </div>
         </header>
 
-        <div className="flex flex-col gap-10 pb-40">
+        <div className="max-w-7xl mx-auto pb-10">
           
+          {/* ABA REGISTRO DE PONTO */}
           {activeTab === 'clock' && (
-            <div className="animate-in fade-in zoom-in-95 duration-500">
+            <div className="animate-in fade-in duration-300">
               {!selectedClockEmployeeId ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                   {data.employees.map(emp => (
-                    <button key={emp.id} onClick={() => setSelectedClockEmployeeId(emp.id)} className="bg-white p-8 rounded-[3.5rem] shadow-sm hover:shadow-2xl hover:-translate-y-2 transition-all border border-slate-100 flex flex-col items-center group aspect-square justify-center">
-                      <div className="w-20 h-20 bg-slate-50 text-slate-300 rounded-[2.5rem] flex items-center justify-center text-4xl font-black group-hover:bg-indigo-600 group-hover:text-white mb-5 transition-all shadow-inner">{emp.name.charAt(0)}</div>
-                      <span className="font-black text-slate-800 text-lg truncate w-full px-4 text-center">{emp.name.split(' ')[0]}</span>
+                    <button key={emp.id} onClick={() => setSelectedClockEmployeeId(emp.id)} className="bg-white p-6 rounded-3xl shadow-sm hover:shadow-md transition-all border border-slate-100 flex flex-col items-center group">
+                      <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-2xl flex items-center justify-center text-2xl font-black mb-3 group-hover:bg-indigo-600 group-hover:text-white transition-all">{emp.name.charAt(0)}</div>
+                      <span className="font-bold text-slate-700 truncate w-full text-center text-sm">{emp.name.split(' ')[0]}</span>
                     </button>
                   ))}
                 </div>
               ) : (
-                <div className="max-w-6xl mx-auto w-full space-y-8">
-                  <button onClick={() => setSelectedClockEmployeeId(null)} className="flex items-center gap-2 text-slate-400 font-black uppercase text-[10px] hover:text-indigo-600 transition-all mb-4"><ChevronLeft size={16}/> Voltar</button>
+                <div className="max-w-3xl mx-auto w-full space-y-6">
+                  <button onClick={() => setSelectedClockEmployeeId(null)} className="flex items-center gap-2 text-slate-400 font-black uppercase text-[10px] hover:text-indigo-600"><ChevronLeft size={14}/> Voltar para lista</button>
                   {data.employees.filter(e => e.id === selectedClockEmployeeId).map(emp => {
-                    const todayStr = currentTime.toISOString().split('T')[0];
-                    const rec = data.records.find(r => r.employeeId === emp.id && r.date === todayStr);
-                    const action = getNextAction(rec);
                     const balance = getCumulativeBalance(emp.id);
+                    const record = data.records.find(r => r.employeeId === emp.id && r.date === getLocalDateString(currentTime));
+                    const action = getNextAction(record);
                     return (
-                      <div key={emp.id} className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                        <div className="lg:col-span-8 bg-white p-12 rounded-[4rem] shadow-2xl border border-slate-100">
-                          <div className="flex items-center gap-8 mb-12">
-                             <div className="w-24 h-24 bg-indigo-600 text-white rounded-[2.5rem] flex items-center justify-center text-5xl font-black shadow-2xl">{emp.name.charAt(0)}</div>
-                             <div>
-                                <h2 className="text-4xl font-black text-slate-900 font-serif italic">{emp.name}</h2>
-                                <p className="text-slate-400 text-sm font-bold uppercase tracking-widest mt-1">{emp.role}</p>
-                             </div>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-6 mb-12">
-                            {[
-                              { label: 'Ent.', time: rec?.clockIn },
-                              { label: 'Alm. I', time: rec?.lunchStart },
-                              { label: 'Alm. F', time: rec?.lunchEnd },
-                              { label: 'Lan. I', time: rec?.snackStart },
-                              { label: 'Lan. F', time: rec?.snackEnd },
-                              { label: 'Saída', time: rec?.clockOut },
-                            ].map((it, i) => (
-                              <div key={i} className={`p-6 rounded-[2rem] border-2 text-center transition-all ${it.time ? 'bg-indigo-50/50 border-indigo-100' : 'bg-slate-50/50 border-transparent opacity-40'}`}>
-                                <span className="text-[9px] font-black uppercase block text-slate-400 mb-2">{it.label}</span>
-                                <p className="text-xl font-mono font-black text-slate-800">{formatTime(it.time || null)}</p>
-                              </div>
-                            ))}
-                          </div>
-
-                          <button disabled={action.stage === 'done'} onClick={() => handleClockAction(emp.id)} className={`w-full py-10 rounded-[3rem] font-black text-3xl shadow-2xl transition-all flex items-center justify-center gap-6 ${action.color} text-white active:scale-95`}>
-                            {action.icon} <span className="uppercase tracking-widest">{action.label}</span>
+                      <div key={emp.id} className="space-y-6">
+                        <div className="bg-white p-8 md:p-12 rounded-[3rem] shadow-xl border border-slate-100 flex flex-col items-center text-center">
+                          <h2 className="text-3xl font-black font-serif italic mb-1">{emp.name}</h2>
+                          <p className="text-slate-400 font-bold uppercase text-[10px] mb-10 tracking-widest">{emp.role}</p>
+                          <button disabled={action.stage === 'done'} onClick={() => handleClockAction(emp.id)} className={`w-full max-w-md py-10 rounded-[2.5rem] font-black text-2xl shadow-xl transition-all flex items-center justify-center gap-4 ${action.color} text-white active:scale-95 mb-10`}>
+                            {action.icon} {action.label}
                           </button>
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 w-full max-w-2xl">
+                             {[
+                               { l: 'Entrada', v: record?.clockIn, i: <LogIn size={14}/> },
+                               { l: 'I. Almoço', v: record?.lunchStart, i: <Utensils size={14}/> },
+                               { l: 'R. Almoço', v: record?.lunchEnd, i: <Utensils size={14}/> },
+                               { l: 'I. Lanche', v: record?.snackStart, i: <Coffee size={14}/> },
+                               { l: 'R. Lanche', v: record?.snackEnd, i: <Coffee size={14}/> },
+                               { l: 'Saída', v: record?.clockOut, i: <LogOut size={14}/> },
+                             ].map((t, idx) => (
+                               <div key={idx} className={`p-4 rounded-2xl border transition-all ${t.v ? 'bg-indigo-50 border-indigo-100' : 'bg-slate-50 border-slate-100 opacity-40'}`}>
+                                  <div className="flex items-center justify-center gap-2 mb-1">
+                                    <span className="text-indigo-400">{t.i}</span>
+                                    <p className="text-[8px] font-black text-slate-400 uppercase">{t.l}</p>
+                                  </div>
+                                  <p className="font-mono font-black text-lg text-slate-800">{formatTime(t.v)}</p>
+                               </div>
+                             ))}
+                          </div>
                         </div>
-
-                        <div className="lg:col-span-4 bg-[#1e293b] text-white p-12 rounded-[4rem] flex flex-col justify-center text-center shadow-2xl relative overflow-hidden">
-                            <div className="absolute top-0 right-0 w-48 h-48 bg-indigo-500/5 rounded-full -translate-y-1/2 translate-x-1/2"></div>
-                            <p className="text-[11px] font-black text-indigo-400 uppercase tracking-widest mb-4">Saldo Atual</p>
-                            <p className={`text-6xl font-mono font-black ${balance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatMinutes(balance)}</p>
-                            <button onClick={() => setIsHistoryModalOpen(true)} className="mt-12 py-5 border border-white/10 rounded-2xl text-[11px] font-black uppercase text-slate-400 hover:text-white flex items-center justify-center gap-3 transition-all hover:bg-white/5"><History size={20}/> Ver Histórico</button>
+                        <div className="bg-[#1e293b] text-white p-8 rounded-[2.5rem] flex flex-col items-center justify-center shadow-xl text-center relative overflow-hidden">
+                          <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2 relative z-10">Saldo Acumulado</p>
+                          <p className={`text-5xl font-mono font-black relative z-10 ${balance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatMinutes(balance)}</p>
+                          <div className="absolute top-0 right-0 p-4 opacity-5"><ClockIcon size={120}/></div>
                         </div>
                       </div>
                     );
@@ -478,296 +424,270 @@ const App: React.FC = () => {
             </div>
           )}
 
+          {/* ÁREA GESTÃO */}
           {isManagerAuthenticated && (
-            <div className="flex flex-col gap-10 animate-in slide-in-from-bottom-8 duration-500">
+            <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-300">
               
               {activeTab === 'dashboard' && (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    <div className="bg-white p-10 rounded-[3.5rem] border border-slate-100 shadow-sm">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Equipe Nobel</p>
-                      <p className="text-5xl font-black text-slate-800 mt-4">{data.employees.length}</p>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Equipe Ativa</p>
+                      <p className="text-4xl font-black mt-1 text-slate-800">{data.employees.length}</p>
                     </div>
-                    <div className="bg-indigo-600 p-10 rounded-[3.5rem] shadow-2xl text-white">
-                      <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">Saldo Geral Equipe</p>
-                      <p className="text-4xl font-mono font-black mt-4">{formatMinutes(data.employees.reduce((acc, emp) => acc + getCumulativeBalance(emp.id), 0))}</p>
+                    <div className="bg-indigo-600 p-8 rounded-3xl shadow-xl text-white">
+                      <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">Saldo Geral da Loja</p>
+                      <p className="text-3xl font-mono font-black mt-1">{formatMinutes(data.employees.reduce((acc, e) => acc + getCumulativeBalance(e.id), 0))}</p>
                     </div>
-                    <div className="bg-[#0f172a] p-10 rounded-[3.5rem] text-white flex flex-col justify-between relative overflow-hidden shadow-2xl">
-                       <div className="flex items-center gap-3 text-indigo-400 z-10"><Sparkles size={20}/> <span className="text-[10px] font-black uppercase">IA Nobel</span></div>
-                       <p className="text-sm italic text-slate-300 mt-4 z-10">{aiInsights || "Sincronizado com os dados do escritório Petrópolis."}</p>
-                       <button onClick={() => setAiInsights("IA processando dados da Petrópolis...")} className="mt-6 px-6 py-3 bg-white/5 border border-white/10 text-white rounded-xl text-[10px] font-black uppercase hover:bg-white/10 self-start z-10">Recalcular Análise</button>
+                    <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
+                       <CheckCircle2 className="text-emerald-500" size={32}/>
+                       <div><p className="text-[10px] font-black text-slate-400 uppercase">Status do Sistema</p><p className="text-xs font-bold text-slate-800">Conectado em nuvem (Supabase)</p></div>
                     </div>
                   </div>
-                </>
+                  <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100 flex gap-4">
+                    <div className="bg-indigo-600 text-white p-2 rounded-xl h-fit"><Info size={20}/></div>
+                    <div>
+                      <h3 className="font-black text-sm text-indigo-900 mb-1 italic font-serif">Gestão de Banco de Horas</h3>
+                      <p className="text-xs text-indigo-700 leading-relaxed max-w-3xl">Lembre-se: Para excluir registros, basta clicar no ícone da lixeira vermelha. Se a exclusão falhar, o sistema mostrará um aviso com o motivo técnico.</p>
+                    </div>
+                  </div>
+                </div>
               )}
 
               {activeTab === 'employees' && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-                   <div className="lg:col-span-4 bg-white p-12 rounded-[4rem] shadow-xl border border-slate-100 flex flex-col">
-                      <h2 className="text-2xl font-black font-serif italic mb-10 flex items-center gap-4"><UserPlus size={28}/> {editingEmployeeId ? 'Editar Perfil' : 'Novo Perfil'}</h2>
-                      <form onSubmit={async (e) => {
-                         e.preventDefault();
-                         if (!supabase) return;
-                         const payload = { 
-                           name: newEmp.name, role: newEmp.role, baseDailyMinutes: parseInt(newEmp.dailyHours) * 60,
-                           englishWeekDay: parseInt(newEmp.englishDay), englishWeekMinutes: parseInt(newEmp.shortDayHours) * 60,
-                           initialBalanceMinutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), isHourly: newEmp.isHourly,
-                           startDate: newEmp.startDate
-                         };
-                         if (editingEmployeeId) await supabase.from('employees').update(payload).eq('id', editingEmployeeId);
-                         else await supabase.from('employees').insert([payload]);
-                         setEditingEmployeeId(null); 
-                         setNewEmp({ name:'', role:'', dailyHours:'8', englishDay:'6', shortDayHours:'0', initialBalanceStr:'00:00', isHourly:false, startDate: DEFAULT_START_DATE }); 
-                         fetchData();
-                         alert("Perfil salvo!");
-                      }} className="space-y-6">
-                         <div className="space-y-2">
-                            <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Nome</label>
-                            <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-100 font-bold" placeholder="Nome Completo..."/>
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                  <div className="lg:col-span-4 bg-white p-8 rounded-[2.5rem] shadow-lg border border-slate-100">
+                    <h2 className="text-xl font-black font-serif italic mb-6">Perfil do Colaborador</h2>
+                    <form onSubmit={async (e) => {
+                      e.preventDefault();
+                      if(!supabase) return;
+                      const payload = {
+                        name: newEmp.name, role: newEmp.role, baseDailyMinutes: parseInt(newEmp.dailyHours)*60,
+                        englishWeekDay: parseInt(newEmp.englishDay), englishWeekMinutes: parseInt(newEmp.shortDayHours)*60,
+                        initialBalanceMinutes: parseTimeStringToMinutes(newEmp.initialBalanceStr), startDate: newEmp.startDate
+                      };
+                      if(editingEmployeeId) await supabase.from('employees').update(payload).eq('id', editingEmployeeId);
+                      else await supabase.from('employees').insert([payload]);
+                      setEditingEmployeeId(null); setNewEmp({...newEmp, name:'', role:''}); fetchData();
+                      alert("Dados salvos com sucesso!");
+                    }} className="space-y-4">
+                      <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Nome Completo"/>
+                      <input required value={newEmp.role} onChange={e => setNewEmp({...newEmp, role:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Cargo"/>
+                      <div>
+                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Início do Cálculo</label>
+                        <input type="date" required value={newEmp.startDate} onChange={e => setNewEmp({...newEmp, startDate:e.target.value})} className="w-full p-4 rounded-xl bg-indigo-50 border-2 border-indigo-100 font-black text-indigo-700 text-sm"/>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Meta (h)</label>
+                          <input type="number" value={newEmp.dailyHours} onChange={e => setNewEmp({...newEmp, dailyHours:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm"/>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Folga fixa</label>
+                          <select value={newEmp.englishDay} onChange={e => setNewEmp({...newEmp, englishDay:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
+                            {WEEK_DAYS_BR.map((d,i) => <option key={i} value={i}>{d}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                         <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Saldo Inicial (HH:MM)</label>
+                         <input type="text" value={newEmp.initialBalanceStr} onChange={e => setNewEmp({...newEmp, initialBalanceStr:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="00:00"/>
+                      </div>
+                      <button type="submit" className="w-full py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg mt-4">Salvar Alterações</button>
+                    </form>
+                  </div>
+                  <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-4 h-fit">
+                    {data.employees.map(emp => (
+                      <div key={emp.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between">
+                         <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 bg-slate-100 text-slate-500 rounded-xl flex items-center justify-center font-black">{emp.name.charAt(0)}</div>
+                            <div><p className="font-black text-slate-800 text-sm">{emp.name}</p><p className="text-[9px] font-black text-slate-400 uppercase">{emp.role}</p></div>
                          </div>
-                         <div className="space-y-2">
-                            <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Início do Controle</label>
-                            <input type="date" value={newEmp.startDate} onChange={e => setNewEmp({...newEmp, startDate: e.target.value})} className="w-full p-5 rounded-2xl bg-indigo-50 border-2 border-indigo-100 font-black text-indigo-700"/>
+                         <div className="flex gap-2">
+                            <button onClick={() => {
+                               setEditingEmployeeId(emp.id);
+                               const cleanDate = emp.startDate ? emp.startDate.substring(0, 10) : DEFAULT_START_DATE;
+                               setNewEmp({
+                                 name: emp.name, role: emp.role, dailyHours: (emp.baseDailyMinutes/60).toString(),
+                                 englishDay: (emp.englishWeekDay).toString(), shortDayHours: (emp.englishWeekMinutes/60).toString(),
+                                 initialBalanceStr: formatMinutes(emp.initialBalanceMinutes).replace('+', '').replace('-', '').replace('h ', ':').replace('m', '').trim(),
+                                 startDate: cleanDate, isHourly: false
+                               });
+                            }} className="p-2 bg-slate-50 text-slate-400 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"><Edit2 size={16}/></button>
+                            <button onClick={async () => { 
+                              if(confirm(`Remover permanentemente ${emp.name}?`)) { 
+                                const { error } = await supabase!.from('employees').delete().eq('id', emp.id);
+                                if (error) alert("Erro ao excluir funcionário: " + error.message);
+                                else fetchData();
+                              } 
+                            }} className="p-2 bg-slate-50 text-rose-300 rounded-lg hover:bg-rose-600 hover:text-white transition-all"><Trash2 size={16}/></button>
                          </div>
-                         <div className="grid grid-cols-2 gap-5">
-                            <div className="space-y-2">
-                               <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Horas/Dia</label>
-                               <input type="number" value={newEmp.dailyHours} onChange={e => setNewEmp({...newEmp, dailyHours: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-100 text-center font-black"/>
-                            </div>
-                            <div className="space-y-2">
-                               <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Dia de Folga</label>
-                               <select value={newEmp.englishDay} onChange={e => setNewEmp({...newEmp, englishDay: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-100 font-black">
-                                  {WEEK_DAYS_BR.map((d, i) => <option key={i} value={i}>{d}</option>)}
-                               </select>
-                            </div>
-                         </div>
-                         <div className="space-y-2">
-                            <label className="text-[11px] font-black uppercase text-slate-400 ml-1">Semana Inglesa (Meta no dia da folga)</label>
-                            <input type="number" value={newEmp.shortDayHours} onChange={e => setNewEmp({...newEmp, shortDayHours: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-100 text-center font-black" placeholder="0 para folga total"/>
-                         </div>
-                         <button type="submit" className="w-full py-6 bg-indigo-600 text-white rounded-[2.5rem] font-black uppercase text-sm shadow-xl hover:bg-indigo-700 transition-all">Salvar Alterações</button>
-                      </form>
-                   </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-                   <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-6 self-start">
-                      {data.employees.map(emp => (
-                         <div key={emp.id} className="bg-white p-10 rounded-[3.5rem] border border-slate-100 shadow-sm relative group hover:shadow-xl transition-all border-b-8 hover:border-b-indigo-500">
-                            <div className="flex justify-between items-start mb-6">
-                               <div className="w-16 h-16 bg-slate-50 text-indigo-600 rounded-2xl flex items-center justify-center font-black text-2xl shadow-inner">{emp.name.charAt(0)}</div>
-                               <button onClick={() => handleEditEmployee(emp)} className="p-3 bg-slate-50 text-slate-400 rounded-xl hover:bg-indigo-600 hover:text-white transition-all shadow-sm opacity-0 group-hover:opacity-100"><Edit2 size={20}/></button>
-                            </div>
-                            <h3 className="font-black text-slate-800 text-xl truncate">{emp.name}</h3>
-                            <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest mt-1">{emp.role}</p>
-                            <div className="mt-8 pt-8 border-t border-slate-50 flex justify-between items-center">
-                               <span className="text-[10px] font-black uppercase text-slate-400">Saldo Atual</span>
-                               <span className={`text-2xl font-mono font-black ${getCumulativeBalance(emp.id) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatMinutes(getCumulativeBalance(emp.id))}</span>
-                            </div>
-                         </div>
-                      ))}
-                   </div>
+              {activeTab === 'justifications' && (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                  <div className="lg:col-span-4 bg-white p-8 rounded-[2.5rem] shadow-lg border border-slate-100 h-fit">
+                    <h2 className="text-xl font-black font-serif italic mb-6">Abonar ou Justificar</h2>
+                    <form onSubmit={handleSaveJustification} className="space-y-4">
+                      <select required value={justificationForm.employeeId} onChange={e => setJustificationForm({...justificationForm, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
+                        <option value="">Selecione Colaborador...</option>
+                        {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                      </select>
+                      <input type="date" value={justificationForm.date} onChange={e => setJustificationForm({...justificationForm, date: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          { id: 'MEDICAL', label: 'Atestado', icon: <HeartPulse size={14}/> },
+                          { id: 'VACATION', label: 'Férias', icon: <Palmtree size={14}/> },
+                          { id: 'HOLIDAY', label: 'Feriado', icon: <Calendar size={14}/> },
+                          { id: 'OFF_DAY', label: 'Folga', icon: <UserCheck size={14}/> },
+                        ].map(type => (
+                          <button key={type.id} type="button" onClick={() => setJustificationForm({...justificationForm, type: type.id as EntryType})} className={`p-4 rounded-xl border-2 flex flex-col items-center gap-1 font-black text-[9px] uppercase transition-all ${justificationForm.type === type.id ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 border-transparent text-slate-400'}`}>
+                            {type.icon} {type.label}
+                          </button>
+                        ))}
+                      </div>
+                      <textarea value={justificationForm.note} onChange={e => setJustificationForm({...justificationForm, note: e.target.value})} placeholder="Observação..." className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 text-sm h-24 resize-none"/>
+                      <button type="submit" disabled={isSaving} className="w-full py-5 bg-[#0f172a] text-white rounded-2xl font-black uppercase text-xs shadow-xl flex items-center justify-center gap-3">
+                         {isSaving ? <RefreshCw className="animate-spin" size={16}/> : <Plus size={16}/>} Lançar Abono
+                      </button>
+                    </form>
+                  </div>
+                  <div className="lg:col-span-8 bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden h-fit">
+                    <div className="bg-slate-50/50 px-8 py-5 border-b border-slate-100 flex justify-between items-center"><span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Abonos Lançados</span> <ShieldCheck className="text-indigo-400" size={16}/></div>
+                    <div className="overflow-x-auto">
+                       <table className="w-full text-left">
+                          <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
+                             <tr><th className="px-8 py-4">Pessoa</th><th className="px-8 py-4">Tipo</th><th className="px-8 py-4">Data</th><th className="px-8 py-4 text-center">Remover</th></tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                             {data.timeBank.filter(t => ['MEDICAL', 'VACATION', 'HOLIDAY', 'OFF_DAY'].includes(t.type)).slice(0, 15).map(t => {
+                               const emp = data.employees.find(e => e.id === t.employeeId);
+                               return (
+                                 <tr key={t.id} className="text-xs font-bold text-slate-700">
+                                   <td className="px-8 py-4">{emp?.name}</td>
+                                   <td className="px-8 py-4"><span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-md text-[9px] uppercase">{ENTRY_TYPE_LABELS[t.type]}</span></td>
+                                   <td className="px-8 py-4 font-mono opacity-50">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
+                                   <td className="px-8 py-4 text-center">
+                                      <button onClick={() => handleDeleteEntry(t.id, "Excluir abono permanentemente?")} className="text-rose-300 hover:text-rose-600"><Trash2 size={16}/></button>
+                                   </td>
+                                 </tr>
+                               )
+                             })}
+                          </tbody>
+                       </table>
+                    </div>
+                  </div>
                 </div>
               )}
 
               {activeTab === 'admin' && (
-                <div className="flex flex-col gap-10">
-                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-                      
-                      <div className="lg:col-span-5 bg-white p-12 rounded-[4rem] shadow-xl border border-slate-100 flex flex-col gap-8">
-                         <div className="flex justify-between items-center">
-                           <div className="flex items-center gap-5">
-                             <div className="p-5 bg-indigo-50 text-indigo-600 rounded-[2rem] shadow-inner"><Plus size={32}/></div>
-                             <h2 className="text-3xl font-black font-serif italic">Ajuste Manual</h2>
-                           </div>
-                           <button onClick={fillStandardShift} type="button" className="px-5 py-3 bg-indigo-100 text-indigo-700 rounded-2xl text-[11px] font-black uppercase hover:bg-indigo-600 hover:text-white transition-all shadow-sm">Lançar Dia Inteiro</button>
-                         </div>
-                         
-                         <form onSubmit={handleRetroAdjust} className="space-y-8 flex flex-col flex-1">
-                            <select required value={retroForm.employeeId} onChange={e => setRetroForm({...retroForm, employeeId: e.target.value})} className="w-full p-6 rounded-3xl bg-slate-50 border border-slate-100 font-black text-lg outline-none focus:ring-4 focus:ring-indigo-500/10">
-                               <option value="">Selecionar Funcionário...</option>
-                               {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                            </select>
-                            
-                            <div className="grid grid-cols-2 gap-5">
-                               <input type="date" value={retroForm.date} onChange={e => setRetroForm({...retroForm, date: e.target.value})} className="w-full p-6 rounded-3xl bg-slate-50 border border-slate-100 font-black"/>
-                               <div className="flex bg-slate-100 rounded-[2rem] p-2 border border-slate-200">
-                                  <button type="button" onClick={() => setRetroForm({...retroForm, isPositive: true})} className={`flex-1 py-4 rounded-2xl font-black text-xl transition-all ${retroForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-indigo-400'}`}>+</button>
-                                  <button type="button" onClick={() => setRetroForm({...retroForm, isPositive: false})} className={`flex-1 py-4 rounded-2xl font-black text-xl transition-all ${!retroForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-indigo-400'}`}>-</button>
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                  <div className="lg:col-span-5 bg-white p-10 rounded-[3rem] shadow-xl border border-slate-100 flex flex-col items-center">
+                    <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-6 shadow-inner"><Plus size={32}/></div>
+                    <h2 className="text-3xl font-black font-serif italic mb-8">Ajuste Manual</h2>
+                    
+                    <form onSubmit={handleSaveAdjustment} className="w-full space-y-6">
+                       <select required value={adjustmentForm.employeeId} onChange={e => setAdjustmentForm({...adjustmentForm, employeeId: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner">
+                          <option value="">Selecionar Funcionário...</option>
+                          {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                       </select>
+
+                       <div className="flex items-center gap-3">
+                          <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="flex-1 p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
+                          <div className="flex bg-slate-100 rounded-2xl p-1 shadow-inner h-[62px]">
+                            <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, isPositive: true})} className={`w-12 rounded-xl font-black text-xl transition-all ${adjustmentForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400'}`}>+</button>
+                            <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, isPositive: false})} className={`w-12 rounded-xl font-black text-xl transition-all ${!adjustmentForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400'}`}>-</button>
+                          </div>
+                       </div>
+
+                       <div className="grid grid-cols-2 gap-3">
+                          <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, type: 'WORK_RETRO'})} className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${adjustmentForm.type === 'WORK_RETRO' ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-105' : 'bg-slate-50 border-transparent text-slate-400 hover:bg-white hover:border-indigo-100'}`}>
+                             <History size={20}/><span className="text-[10px] font-black uppercase tracking-widest text-center">Trabalho Real<br/><span className="opacity-50 lowercase font-normal italic">(desconta a meta)</span></span>
+                          </button>
+                          <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, type: 'ADJUSTMENT'})} className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${adjustmentForm.type === 'ADJUSTMENT' ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-105' : 'bg-slate-50 border-transparent text-slate-400 hover:bg-white hover:border-indigo-100'}`}>
+                             <Plus size={20}/><span className="text-[10px] font-black uppercase tracking-widest text-center">Ajuste Delta<br/><span className="opacity-50 lowercase font-normal italic">(soma bruta)</span></span>
+                          </button>
+                       </div>
+
+                       <div className="pt-6 pb-2 text-center">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Horas (HH:MM)</p>
+                          <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
+                       </div>
+
+                       <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center gap-3">
+                          {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar Lançamento
+                       </button>
+                    </form>
+                  </div>
+
+                  <div className="lg:col-span-7 bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col">
+                    <div className="flex justify-between items-center mb-8"><h3 className="text-xl font-black font-serif italic">Histórico de Ajustes</h3> <History className="text-slate-300" size={24}/></div>
+                    <div className="space-y-3 overflow-y-auto max-h-[600px] pr-2">
+                       {data.timeBank.filter(t => ['WORK_RETRO', 'ADJUSTMENT', 'BONUS'].includes(t.type)).map(t => {
+                          const emp = data.employees.find(e => e.id === t.employeeId);
+                          return (
+                            <div key={t.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex justify-between items-center group">
+                               <div>
+                                  <p className="font-black text-slate-800 text-sm mb-1">{emp?.name || '---'}</p>
+                                  <div className="flex gap-2">
+                                     <span className="px-2 py-0.5 bg-indigo-100 text-indigo-600 rounded-lg text-[9px] font-black uppercase">{ENTRY_TYPE_LABELS[t.type]}</span>
+                                     <span className="text-[10px] font-bold text-slate-400 font-mono">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</span>
+                                  </div>
+                               </div>
+                               <div className="flex items-center gap-6">
+                                  <p className={`text-xl font-mono font-black ${t.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatMinutes(t.minutes)}</p>
+                                  <button onClick={() => handleDeleteEntry(t.id, "Remover ajuste permanentemente?")} className="p-2 text-rose-300 hover:text-rose-600 transition-all"><Trash2 size={20}/></button>
                                </div>
                             </div>
-                            
-                            <div className="grid grid-cols-2 gap-5">
-                               <button type="button" onClick={() => setRetroForm({...retroForm, type: 'WORK_RETRO'})} className={`p-5 rounded-3xl border-2 font-black text-xs uppercase transition-all flex flex-col items-center gap-2 ${retroForm.type === 'WORK_RETRO' ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl' : 'bg-slate-50 border-transparent text-slate-500 hover:border-slate-200'}`}>
-                                 <History size={20}/>
-                                 <span>Trabalho Real</span>
-                               </button>
-                               <button type="button" onClick={() => setRetroForm({...retroForm, type: 'ADJUSTMENT'})} className={`p-5 rounded-3xl border-2 font-black text-xs uppercase transition-all flex flex-col items-center gap-2 ${retroForm.type === 'ADJUSTMENT' ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl' : 'bg-slate-50 border-transparent text-slate-500 hover:border-slate-200'}`}>
-                                 <Plus size={20}/>
-                                 <span>Ajuste Delta</span>
-                               </button>
-                            </div>
-
-                            <div className="space-y-6 mt-auto">
-                               <input type="text" value={retroForm.amountStr} onChange={e => setRetroForm({...retroForm, amountStr: e.target.value})} className="w-full p-8 rounded-[3rem] bg-slate-50 border-2 border-slate-200 font-mono font-black text-5xl text-center text-slate-800" placeholder="00:00"/>
-                               <button type="submit" className="w-full py-8 bg-[#0f172a] text-white rounded-[3rem] font-black uppercase text-lg shadow-2xl hover:bg-black transition-all active:scale-95 border-b-8 border-indigo-900">Salvar Lançamento</button>
-                            </div>
-                            
-                            <p className="text-[10px] text-slate-400 font-bold uppercase text-center leading-relaxed px-4 italic">
-                                {retroForm.type === 'WORK_RETRO' 
-                                  ? "Modo 'Trabalho Real': Digite as horas totais trabalhadas. O sistema abate a meta sozinho."
-                                  : "Modo 'Ajuste Delta': Digite apenas o tempo (crédito ou débito) a ser somado ao banco."}
-                            </p>
-                         </form>
-                      </div>
-                      
-                      <div className="lg:col-span-7 bg-white rounded-[4rem] shadow-sm border border-slate-100 overflow-hidden flex flex-col min-h-[700px]">
-                         <div className="bg-slate-50/50 px-10 py-8 border-b border-slate-100 flex justify-between items-center">
-                            <div>
-                               <span className="text-xs font-black uppercase text-slate-400 block tracking-widest">Histórico de Lançamentos Manuais</span>
-                               <span className="text-[10px] font-bold text-indigo-400 uppercase mt-1">Lançados no Painel</span>
-                            </div>
-                            <ClipboardCheck size={24} className="text-slate-300"/>
-                         </div>
-                         <div className="overflow-y-auto flex-1">
-                           <table className="w-full text-left">
-                              <thead className="bg-slate-50/80 sticky top-0 backdrop-blur-md z-20">
-                                 <tr>
-                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 tracking-tighter">Colaborador</th>
-                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-center">Data</th>
-                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-right">Valor Lançado</th>
-                                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-center">Ações</th>
-                                 </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                 {data.timeBank.filter(t => t.type !== 'WORK').slice(0, 50).map(t => {
-                                   const emp = data.employees.find(e => e.id === t.employeeId);
-                                   const isAwaiting = idAwaitingDelete === t.id;
-                                   const targetDate = new Date(t.date + "T12:00:00");
-                                   
-                                   // EXIBIÇÃO INTELIGENTE: Se for retroativo, mostramos o tempo TOTAL (delta + meta)
-                                   let displayMinutes = t.minutes;
-                                   if (t.type === 'WORK_RETRO' && emp) {
-                                      displayMinutes = t.minutes + getExpectedMinutesForDate(emp, targetDate);
-                                   }
-
-                                   return (
-                                     <tr key={t.id} className="hover:bg-slate-50/50 transition-colors group">
-                                        <td className="px-10 py-8">
-                                           <p className="font-black text-slate-800 text-lg leading-tight truncate max-w-[150px]">{emp?.name || '---'}</p>
-                                           <span className={`mt-2 inline-block px-3 py-1 rounded-full text-[9px] font-black uppercase border ${
-                                              t.type === 'MEDICAL' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                                              t.type === 'VACATION' ? 'bg-amber-50 text-amber-600 border-amber-100' :
-                                              t.type === 'OFF_DAY' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                                              'bg-indigo-50 text-indigo-600 border-indigo-100'
-                                           }`}>
-                                              {ENTRY_TYPE_LABELS[t.type]}
-                                           </span>
-                                        </td>
-                                        <td className="px-10 py-8 text-center">
-                                           <p className="text-[11px] font-mono font-black text-slate-400 uppercase tracking-widest">{new Date(t.date + "T00:00:00").toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit', year:'2-digit'})}</p>
-                                        </td>
-                                        <td className={`px-10 py-8 text-right font-mono font-black text-xl ${displayMinutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                          {formatMinutes(displayMinutes)}
-                                        </td>
-                                        <td className="px-10 py-8 text-center">
-                                           <div className="flex justify-center">
-                                              <button 
-                                                onClick={() => handleDeleteTimeBankEntry(t.id)} 
-                                                disabled={isDeleting && isAwaiting}
-                                                className={`p-5 rounded-3xl transition-all shadow-sm group relative overflow-hidden min-w-[60px] flex items-center justify-center ${
-                                                  isAwaiting 
-                                                    ? 'bg-rose-600 text-white scale-110 shadow-rose-200 shadow-xl' 
-                                                    : 'bg-rose-50 text-rose-500 hover:bg-rose-600 hover:text-white'
-                                                }`}
-                                              >
-                                                {isAwaiting ? (
-                                                  <div className="flex items-center gap-2 animate-pulse">
-                                                    <CheckCircle2 size={20}/>
-                                                    <span className="text-[9px] font-black uppercase">CONFIRMAR?</span>
-                                                  </div>
-                                                ) : <Trash2 size={24}/>}
-                                              </button>
-                                           </div>
-                                        </td>
-                                     </tr>
-                                   )
-                                 })}
-                              </tbody>
-                           </table>
-                           {data.timeBank.filter(t => t.type !== 'WORK').length === 0 && (
-                              <div className="p-20 text-center text-slate-300 italic">
-                                 <ClipboardCheck size={64} className="mx-auto mb-4 opacity-10"/>
-                                 <p className="font-bold text-sm">Nenhum lançamento manual encontrado.</p>
-                              </div>
-                           )}
-                         </div>
-                      </div>
-                   </div>
-
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                      <div className="bg-white p-12 rounded-[4rem] shadow-xl border border-slate-100 flex flex-col gap-10">
-                         <div className="flex items-center gap-5">
-                            <div className="p-5 bg-rose-50 text-rose-600 rounded-[2rem] shadow-inner"><Lock size={32}/></div>
-                            <h2 className="text-3xl font-black font-serif italic text-slate-800">Segurança</h2>
-                         </div>
-                         <div className="space-y-8">
-                            <div className="space-y-3">
-                               <label className="text-xs font-black uppercase text-slate-400 ml-2">ATUALIZAR PIN GERENCIAL</label>
-                               <input maxLength={4} type="password" value={newPin} onChange={e => setNewPin(e.target.value.replace(/\D/g,''))} className="w-full p-8 rounded-[2.5rem] bg-slate-50 border-2 border-slate-100 font-mono font-black text-4xl text-center tracking-[1em] focus:border-indigo-500 outline-none" placeholder="****"/>
-                            </div>
-                            <button onClick={async () => {
-                              if (newPin.length !== 4) return;
-                              await supabase?.from('settings').update({ managerPin: newPin }).eq('id', 1);
-                              setNewPin(''); alert("PIN Atualizado!");
-                            }} className="w-full py-8 bg-[#0f172a] text-white rounded-[3rem] font-black uppercase text-lg shadow-2xl hover:bg-black transition-all border-b-8 border-indigo-900">Salvar PIN</button>
-                         </div>
-                      </div>
-                      
-                      <div className="bg-white p-12 rounded-[4rem] shadow-xl border border-slate-100 flex flex-col justify-between">
-                         <div className="flex items-center gap-5">
-                            <div className="p-5 bg-indigo-50 text-indigo-600 rounded-[2rem] shadow-inner"><RefreshCw size={32}/></div>
-                            <h2 className="text-3xl font-black font-serif italic text-slate-800">Sincronização</h2>
-                         </div>
-                         <div className="space-y-6 pt-10">
-                            <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="w-full py-6 bg-rose-50 text-rose-600 border-2 border-rose-100 rounded-[2rem] font-black uppercase text-xs hover:bg-rose-100 transition-all flex items-center justify-center gap-3">
-                              <RefreshCw size={20}/> Re-sincronizar Dados (Cache Clear)
-                            </button>
-                            <p className="text-center text-[10px] font-black text-slate-300 uppercase tracking-[0.5em] mt-8">Nobel Ponto v5.6 - OFFICE SYNC</p>
-                         </div>
-                      </div>
-                   </div>
+                          )
+                       })}
+                    </div>
+                  </div>
                 </div>
               )}
 
               {activeTab === 'reports' && (
-                <div className="bg-white p-10 rounded-[3.5rem] border border-slate-100 shadow-sm">
-                   <div className="flex justify-between items-center mb-10">
-                      <h2 className="text-2xl font-black font-serif italic">Relatórios Petrópolis</h2>
-                      <div className="flex gap-4">
-                        <button onClick={() => exportToCSV(data.records, 'folha_nobel')} className="px-6 py-4 bg-indigo-50 text-indigo-700 rounded-2xl font-black uppercase text-[10px] flex items-center gap-2 shadow-sm hover:shadow-md transition-all"><Download size={18}/> Folha de Ponto</button>
-                        <button onClick={() => exportToCSV(data.timeBank, 'banco_nobel')} className="px-6 py-4 bg-[#0f172a] text-white rounded-2xl font-black uppercase text-[10px] flex items-center gap-2 shadow-xl hover:bg-black transition-all"><Download size={18}/> Banco de Horas</button>
+                <div className="space-y-6">
+                   <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
+                      <div className="flex-1 min-w-[200px] space-y-1">
+                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Colaborador</label>
+                        <select value={reportFilter.employeeId} onChange={e => setReportFilter({...reportFilter, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs">
+                          <option value="all">Todos os Funcionários</option>
+                          {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                        </select>
                       </div>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Período</label>
+                        <div className="flex items-center gap-2">
+                           <input type="date" value={reportFilter.startDate} onChange={e => setReportFilter({...reportFilter, startDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                           <input type="date" value={reportFilter.endDate} onChange={e => setReportFilter({...reportFilter, endDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                        </div>
+                      </div>
+                      <button onClick={handleExportAccountantReport} className="p-4 bg-[#0f172a] text-white rounded-xl shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2 font-black uppercase text-[10px]"><Download size={16}/> Baixar Excel (Contador)</button>
                    </div>
-                   <div className="overflow-x-auto border rounded-[2rem] overflow-hidden">
+                   <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
                       <table className="w-full text-left">
-                        <thead className="bg-slate-50">
-                          <tr>
-                            <th className="px-8 py-5 font-black uppercase text-[10px] text-slate-400">Data</th>
-                            <th className="px-8 py-5 font-black uppercase text-[10px] text-slate-400">Pessoa</th>
-                            <th className="px-8 py-5 font-black uppercase text-[10px] text-slate-400 text-center">Entrada</th>
-                            <th className="px-8 py-5 font-black uppercase text-[10px] text-slate-400 text-center">Intervalo</th>
-                            <th className="px-8 py-5 font-black uppercase text-[10px] text-slate-400 text-center">Saída</th>
-                          </tr>
+                        <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
+                          <tr><th className="px-8 py-5">Data</th><th className="px-8 py-5">Funcionário</th><th className="px-8 py-5 text-center">Entrada</th><th className="px-8 py-5 text-center">Saída</th><th className="px-8 py-5 text-center">Saldo</th></tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {data.records.slice(0, 50).map(r => (
-                            <tr key={r.id} className="hover:bg-slate-50 transition-colors">
-                               <td className="px-8 py-6 font-bold text-slate-400">{new Date(r.date + "T00:00:00").toLocaleDateString('pt-BR')}</td>
-                               <td className="px-8 py-6 font-black text-slate-800">{data.employees.find(e => e.id === r.employeeId)?.name || '---'}</td>
-                               <td className="px-8 py-6 text-center font-mono font-bold text-indigo-600">{formatTime(r.clockIn)}</td>
-                               <td className="px-8 py-6 text-center font-mono text-slate-400 text-xs">{formatTime(r.lunchStart)} - {formatTime(r.lunchEnd)}</td>
-                               <td className="px-8 py-6 text-center font-mono font-bold text-rose-600">{formatTime(r.clockOut)}</td>
-                            </tr>
-                          ))}
+                          {filteredRecords.map(r => {
+                            const emp = data.employees.find(e => e.id === r.employeeId);
+                            const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+                            return (
+                              <tr key={r.id} className="text-xs font-bold text-slate-600">
+                                <td className="px-8 py-4 font-mono">{new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
+                                <td className="px-8 py-4">{emp?.name}</td>
+                                <td className="px-8 py-4 text-center">{formatTime(r.clockIn)}</td>
+                                <td className="px-8 py-4 text-center">{formatTime(r.clockOut)}</td>
+                                <td className={`px-8 py-4 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{tbe ? formatMinutes(tbe.minutes) : '---'}</td>
+                              </tr>
+                            )
+                          })}
                         </tbody>
                       </table>
                    </div>
@@ -779,61 +699,24 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* LOGIN MODAL */}
+      {/* MODAL PIN */}
       {isLoginModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/90 backdrop-blur-2xl animate-in fade-in duration-300">
-           <div className="bg-white w-full max-w-[400px] p-12 rounded-[5rem] shadow-2xl relative">
-              <button onClick={() => setIsLoginModalOpen(false)} className="absolute top-12 right-12 text-slate-300 hover:text-slate-900 transition-colors"><X size={32}/></button>
-              <div className="text-center mb-10">
-                <div className="w-24 h-24 bg-indigo-50 text-indigo-600 rounded-[3rem] flex items-center justify-center mx-auto mb-6 shadow-inner"><Lock size={44}/></div>
-                <h2 className="text-4xl font-black font-serif italic leading-tight text-slate-900">Painel Gerencial</h2>
-                <p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mt-2">Acesso Restrito Nobel</p>
-              </div>
-              <div className="flex justify-center gap-5 mb-12">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 backdrop-blur-md">
+           <div className="bg-white w-full max-w-[340px] p-10 rounded-[3rem] shadow-2xl relative text-center">
+              <button onClick={() => setIsLoginModalOpen(false)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900"><X size={24}/></button>
+              <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner"><Lock size={32}/></div>
+              <h2 className="text-2xl font-black font-serif italic mb-1">Acesso Gerente</h2>
+              <div className="flex justify-center gap-4 my-8">
                 {[0,1,2,3].map(i => (
-                  <div key={i} className={`w-5 h-5 rounded-full transition-all duration-300 ${pinInput.length > i ? 'bg-indigo-600 scale-125 shadow-lg' : 'bg-slate-200'} ${loginError ? 'bg-rose-500 animate-bounce' : ''}`}></div>
+                  <div key={i} className={`w-3 h-3 rounded-full ${pinInput.length > i ? 'bg-indigo-600 scale-125' : 'bg-slate-200'} ${loginError ? 'bg-rose-500' : ''}`}></div>
                 ))}
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-3 gap-3">
                 {['1','2','3','4','5','6','7','8','9','C','0','<'].map(v => (
-                  <button key={v} onClick={() => v === 'C' ? setPinInput('') : v === '<' ? setPinInput(p => p.slice(0,-1)) : handlePinDigit(v)} className="h-20 rounded-[2.5rem] font-black text-2xl bg-slate-50 text-slate-600 hover:bg-indigo-600 hover:text-white transition-all active:scale-90 shadow-sm">{v}</button>
+                  <button key={v} onClick={() => v === 'C' ? setPinInput('') : v === '<' ? setPinInput(p => p.slice(0,-1)) : handlePinDigit(v)} className="h-14 rounded-xl font-black text-xl bg-slate-50 hover:bg-indigo-600 hover:text-white transition-all">{v}</button>
                 ))}
               </div>
            </div>
-        </div>
-      )}
-
-      {/* EXTRATO MODAL */}
-      {isHistoryModalOpen && selectedClockEmployeeId && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0f172a]/95 backdrop-blur-md p-6 animate-in fade-in">
-          <div className="bg-white w-full max-w-4xl max-h-[85vh] p-12 rounded-[5rem] shadow-2xl relative flex flex-col">
-            <button onClick={() => setIsHistoryModalOpen(false)} className="absolute top-12 right-12 text-slate-300 hover:text-slate-900 transition-colors"><X size={36}/></button>
-            <h2 className="text-4xl font-black font-serif italic mb-12 text-slate-900">Histórico de Ponto</h2>
-            <div className="flex-1 overflow-y-auto hide-scrollbar border-2 rounded-[3.5rem] border-slate-50">
-              <table className="w-full text-left">
-                <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
-                  <tr>
-                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400">Data</th>
-                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-center">Horário Ponto</th>
-                    <th className="px-10 py-6 font-black uppercase text-[10px] text-slate-400 text-right">Resultado Dia</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {data.records.filter(r => r.employeeId === selectedClockEmployeeId).slice(0, 50).map(rec => {
-                    const worked = calculateWorkedMinutes(rec);
-                    const delta = worked - rec.expectedMinutes;
-                    return (
-                      <tr key={rec.id} className="hover:bg-slate-50/50">
-                        <td className="px-10 py-8 font-black text-slate-800 text-lg">{new Date(rec.date + "T00:00:00").toLocaleDateString('pt-BR', {weekday: 'short', day:'2-digit', month:'short'})}</td>
-                        <td className="px-10 py-8 text-center font-mono text-slate-500 text-lg font-bold">{formatTime(rec.clockIn)} - {formatTime(rec.clockOut)}</td>
-                        <td className={`px-10 py-8 text-right font-mono font-black text-xl ${delta >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatMinutes(delta)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </div>
       )}
 

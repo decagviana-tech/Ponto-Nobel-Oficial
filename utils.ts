@@ -13,6 +13,16 @@ export const ENTRY_TYPE_LABELS: Record<EntryType, string> = {
   WORK_RETRO: 'Trabalho Retroativo'
 };
 
+/**
+ * Retorna a data no formato YYYY-MM-DD respeitando o fuso horário local.
+ */
+export const getLocalDateString = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const formatMinutes = (minutes: number): string => {
   const isNegative = minutes < 0;
   const abs = Math.abs(minutes);
@@ -36,7 +46,11 @@ export const parseTimeStringToMinutes = (timeStr: string): number => {
 
 export const formatTime = (dateString: string | null): string => {
   if (!dateString) return '--:--';
+  // Se for uma string de hora pura (HH:mm)
+  if (dateString.length === 5 && dateString.includes(':')) return dateString;
+  
   const date = new Date(dateString);
+  if (isNaN(date.getTime())) return '--:--';
   return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 };
 
@@ -73,16 +87,26 @@ export const calculateWorkedMinutes = (record: ClockRecord, now: Date = new Date
   return Math.max(0, totalMinutes);
 };
 
-export const exportToCSV = (data: any[], filename: string) => {
-  if (data.length === 0) return;
-  const headers = Object.keys(data[0]);
+/**
+ * Exportação otimizada para Excel Brasileiro (Contabilidade)
+ */
+export const exportToCSV = (mappedData: any[], filename: string) => {
+  if (mappedData.length === 0) return;
+  
+  // Pegamos as chaves do primeiro objeto para os cabeçalhos
+  const headers = Object.keys(mappedData[0]);
   
   const csvRows = [
-    headers.join(';'),
-    ...data.map(row => headers.map(header => {
-      const val = row[header];
-      return `"${val}"`;
-    }).join(';'))
+    headers.join(';'), // Excel BR usa ponto e vírgula
+    ...mappedData.map(row => 
+      headers.map(header => {
+        let val = row[header];
+        if (val === null || val === undefined) val = "";
+        // Escapar aspas duplas
+        const stringVal = String(val).replace(/"/g, '""');
+        return `"${stringVal}"`;
+      }).join(';')
+    )
   ];
   
   const csvContent = "\uFEFF" + csvRows.join("\n");
