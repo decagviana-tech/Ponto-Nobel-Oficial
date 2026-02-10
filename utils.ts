@@ -44,7 +44,11 @@ export const parseTimeStringToMinutes = (timeStr: string): number => {
   return isNegative ? -total : total;
 };
 
-export const formatTime = (dateString: string | null): string => {
+/**
+ * Formata uma string de data/hora ou hora pura para exibição.
+ * Suporta string | null | undefined para evitar erros de compilação.
+ */
+export const formatTime = (dateString: string | null | undefined): string => {
   if (!dateString) return '--:--';
   // Se for uma string de hora pura (HH:mm)
   if (dateString.length === 5 && dateString.includes(':')) return dateString;
@@ -93,16 +97,14 @@ export const calculateWorkedMinutes = (record: ClockRecord, now: Date = new Date
 export const exportToCSV = (mappedData: any[], filename: string) => {
   if (mappedData.length === 0) return;
   
-  // Pegamos as chaves do primeiro objeto para os cabeçalhos
   const headers = Object.keys(mappedData[0]);
   
   const csvRows = [
-    headers.join(';'), // Excel BR usa ponto e vírgula
+    headers.join(';'), 
     ...mappedData.map(row => 
       headers.map(header => {
         let val = row[header];
         if (val === null || val === undefined) val = "";
-        // Escapar aspas duplas
         const stringVal = String(val).replace(/"/g, '""');
         return `"${stringVal}"`;
       }).join(';')

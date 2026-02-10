@@ -51,7 +51,6 @@ const App: React.FC = () => {
 
   const DEFAULT_START_DATE = getLocalDateString(new Date());
 
-  // Estados dos formulários
   const [newEmp, setNewEmp] = useState({ 
     name: '', role: '', dailyHours: '8', englishDay: '6', shortDayHours: '4', initialBalanceStr: '00:00', isHourly: false, startDate: DEFAULT_START_DATE
   });
@@ -256,14 +255,26 @@ const App: React.FC = () => {
     }
   };
 
+  /**
+   * Função centralizada para exclusão com feedback visual e tratamento de erro
+   */
   const handleDeleteEntry = async (id: string, message: string) => {
-    if (!supabase) return;
+    if (!supabase) {
+      alert("Erro: Banco de dados não disponível.");
+      return;
+    }
     if (confirm(message)) {
-      const { error } = await supabase.from('timeBank').delete().eq('id', id);
-      if (error) {
-        alert("Erro ao excluir registro: " + error.message);
-      } else {
-        fetchData();
+      try {
+        const { error } = await supabase.from('timeBank').delete().eq('id', id);
+        if (error) {
+          alert("Erro técnico ao excluir: " + error.message);
+          console.error("Supabase delete error:", error);
+        } else {
+          await fetchData();
+        }
+      } catch (err) {
+        alert("Ocorreu um erro inesperado ao tentar excluir.");
+        console.error(err);
       }
     }
   };
@@ -365,7 +376,6 @@ const App: React.FC = () => {
 
         <div className="max-w-7xl mx-auto pb-10">
           
-          {/* ABA REGISTRO DE PONTO */}
           {activeTab === 'clock' && (
             <div className="animate-in fade-in duration-300">
               {!selectedClockEmployeeId ? (
@@ -424,7 +434,6 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* ÁREA GESTÃO */}
           {isManagerAuthenticated && (
             <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-300">
               
@@ -442,13 +451,6 @@ const App: React.FC = () => {
                     <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
                        <CheckCircle2 className="text-emerald-500" size={32}/>
                        <div><p className="text-[10px] font-black text-slate-400 uppercase">Status do Sistema</p><p className="text-xs font-bold text-slate-800">Conectado em nuvem (Supabase)</p></div>
-                    </div>
-                  </div>
-                  <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100 flex gap-4">
-                    <div className="bg-indigo-600 text-white p-2 rounded-xl h-fit"><Info size={20}/></div>
-                    <div>
-                      <h3 className="font-black text-sm text-indigo-900 mb-1 italic font-serif">Gestão de Banco de Horas</h3>
-                      <p className="text-xs text-indigo-700 leading-relaxed max-w-3xl">Lembre-se: Para excluir registros, basta clicar no ícone da lixeira vermelha. Se a exclusão falhar, o sistema mostrará um aviso com o motivo técnico.</p>
                     </div>
                   </div>
                 </div>
@@ -489,10 +491,6 @@ const App: React.FC = () => {
                           </select>
                         </div>
                       </div>
-                      <div className="space-y-1">
-                         <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Saldo Inicial (HH:MM)</label>
-                         <input type="text" value={newEmp.initialBalanceStr} onChange={e => setNewEmp({...newEmp, initialBalanceStr:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="00:00"/>
-                      </div>
                       <button type="submit" className="w-full py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg mt-4">Salvar Alterações</button>
                     </form>
                   </div>
@@ -504,7 +502,7 @@ const App: React.FC = () => {
                             <div><p className="font-black text-slate-800 text-sm">{emp.name}</p><p className="text-[9px] font-black text-slate-400 uppercase">{emp.role}</p></div>
                          </div>
                          <div className="flex gap-2">
-                            <button onClick={() => {
+                            <button type="button" onClick={() => {
                                setEditingEmployeeId(emp.id);
                                const cleanDate = emp.startDate ? emp.startDate.substring(0, 10) : DEFAULT_START_DATE;
                                setNewEmp({
@@ -514,7 +512,7 @@ const App: React.FC = () => {
                                  startDate: cleanDate, isHourly: false
                                });
                             }} className="p-2 bg-slate-50 text-slate-400 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"><Edit2 size={16}/></button>
-                            <button onClick={async () => { 
+                            <button type="button" onClick={async () => { 
                               if(confirm(`Remover permanentemente ${emp.name}?`)) { 
                                 const { error } = await supabase!.from('employees').delete().eq('id', emp.id);
                                 if (error) alert("Erro ao excluir funcionário: " + error.message);
@@ -550,7 +548,6 @@ const App: React.FC = () => {
                           </button>
                         ))}
                       </div>
-                      <textarea value={justificationForm.note} onChange={e => setJustificationForm({...justificationForm, note: e.target.value})} placeholder="Observação..." className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 text-sm h-24 resize-none"/>
                       <button type="submit" disabled={isSaving} className="w-full py-5 bg-[#0f172a] text-white rounded-2xl font-black uppercase text-xs shadow-xl flex items-center justify-center gap-3">
                          {isSaving ? <RefreshCw className="animate-spin" size={16}/> : <Plus size={16}/>} Lançar Abono
                       </button>
@@ -569,10 +566,9 @@ const App: React.FC = () => {
                                return (
                                  <tr key={t.id} className="text-xs font-bold text-slate-700">
                                    <td className="px-8 py-4">{emp?.name}</td>
-                                   <td className="px-8 py-4"><span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-md text-[9px] uppercase">{ENTRY_TYPE_LABELS[t.type]}</span></td>
-                                   <td className="px-8 py-4 font-mono opacity-50">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
+                                   <td className="px-8 py-4 font-mono">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
                                    <td className="px-8 py-4 text-center">
-                                      <button onClick={() => handleDeleteEntry(t.id, "Excluir abono permanentemente?")} className="text-rose-300 hover:text-rose-600"><Trash2 size={16}/></button>
+                                      <button type="button" onClick={() => handleDeleteEntry(t.id, "Excluir abono permanentemente?")} className="text-rose-400 hover:text-rose-600 p-2 rounded-lg hover:bg-rose-50 transition-all relative z-10"><Trash2 size={16}/></button>
                                    </td>
                                  </tr>
                                )
@@ -595,29 +591,10 @@ const App: React.FC = () => {
                           <option value="">Selecionar Funcionário...</option>
                           {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                        </select>
-
                        <div className="flex items-center gap-3">
                           <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="flex-1 p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
-                          <div className="flex bg-slate-100 rounded-2xl p-1 shadow-inner h-[62px]">
-                            <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, isPositive: true})} className={`w-12 rounded-xl font-black text-xl transition-all ${adjustmentForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400'}`}>+</button>
-                            <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, isPositive: false})} className={`w-12 rounded-xl font-black text-xl transition-all ${!adjustmentForm.isPositive ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400'}`}>-</button>
-                          </div>
                        </div>
-
-                       <div className="grid grid-cols-2 gap-3">
-                          <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, type: 'WORK_RETRO'})} className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${adjustmentForm.type === 'WORK_RETRO' ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-105' : 'bg-slate-50 border-transparent text-slate-400 hover:bg-white hover:border-indigo-100'}`}>
-                             <History size={20}/><span className="text-[10px] font-black uppercase tracking-widest text-center">Trabalho Real<br/><span className="opacity-50 lowercase font-normal italic">(desconta a meta)</span></span>
-                          </button>
-                          <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, type: 'ADJUSTMENT'})} className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${adjustmentForm.type === 'ADJUSTMENT' ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-105' : 'bg-slate-50 border-transparent text-slate-400 hover:bg-white hover:border-indigo-100'}`}>
-                             <Plus size={20}/><span className="text-[10px] font-black uppercase tracking-widest text-center">Ajuste Delta<br/><span className="opacity-50 lowercase font-normal italic">(soma bruta)</span></span>
-                          </button>
-                       </div>
-
-                       <div className="pt-6 pb-2 text-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Horas (HH:MM)</p>
-                          <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
-                       </div>
-
+                       <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="w-full p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-6xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
                        <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center gap-3">
                           {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar Lançamento
                        </button>
@@ -630,67 +607,20 @@ const App: React.FC = () => {
                        {data.timeBank.filter(t => ['WORK_RETRO', 'ADJUSTMENT', 'BONUS'].includes(t.type)).map(t => {
                           const emp = data.employees.find(e => e.id === t.employeeId);
                           return (
-                            <div key={t.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex justify-between items-center group">
+                            <div key={t.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex justify-between items-center">
                                <div>
                                   <p className="font-black text-slate-800 text-sm mb-1">{emp?.name || '---'}</p>
-                                  <div className="flex gap-2">
-                                     <span className="px-2 py-0.5 bg-indigo-100 text-indigo-600 rounded-lg text-[9px] font-black uppercase">{ENTRY_TYPE_LABELS[t.type]}</span>
-                                     <span className="text-[10px] font-bold text-slate-400 font-mono">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</span>
-                                  </div>
+                                  <span className="text-[10px] font-bold text-slate-400 font-mono">{new Date(t.date + "T12:00:00").toLocaleDateString('pt-BR')}</span>
                                </div>
                                <div className="flex items-center gap-6">
                                   <p className={`text-xl font-mono font-black ${t.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatMinutes(t.minutes)}</p>
-                                  <button onClick={() => handleDeleteEntry(t.id, "Remover ajuste permanentemente?")} className="p-2 text-rose-300 hover:text-rose-600 transition-all"><Trash2 size={20}/></button>
+                                  <button type="button" onClick={() => handleDeleteEntry(t.id, "Remover ajuste permanentemente?")} className="p-3 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all relative z-10 pointer-events-auto"><Trash2 size={20}/></button>
                                </div>
                             </div>
                           )
                        })}
                     </div>
                   </div>
-                </div>
-              )}
-
-              {activeTab === 'reports' && (
-                <div className="space-y-6">
-                   <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
-                      <div className="flex-1 min-w-[200px] space-y-1">
-                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Colaborador</label>
-                        <select value={reportFilter.employeeId} onChange={e => setReportFilter({...reportFilter, employeeId: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs">
-                          <option value="all">Todos os Funcionários</option>
-                          {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Período</label>
-                        <div className="flex items-center gap-2">
-                           <input type="date" value={reportFilter.startDate} onChange={e => setReportFilter({...reportFilter, startDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
-                           <input type="date" value={reportFilter.endDate} onChange={e => setReportFilter({...reportFilter, endDate: e.target.value})} className="p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
-                        </div>
-                      </div>
-                      <button onClick={handleExportAccountantReport} className="p-4 bg-[#0f172a] text-white rounded-xl shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2 font-black uppercase text-[10px]"><Download size={16}/> Baixar Excel (Contador)</button>
-                   </div>
-                   <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
-                      <table className="w-full text-left">
-                        <thead className="bg-slate-50 text-[9px] font-black uppercase text-slate-400">
-                          <tr><th className="px-8 py-5">Data</th><th className="px-8 py-5">Funcionário</th><th className="px-8 py-5 text-center">Entrada</th><th className="px-8 py-5 text-center">Saída</th><th className="px-8 py-5 text-center">Saldo</th></tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {filteredRecords.map(r => {
-                            const emp = data.employees.find(e => e.id === r.employeeId);
-                            const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
-                            return (
-                              <tr key={r.id} className="text-xs font-bold text-slate-600">
-                                <td className="px-8 py-4 font-mono">{new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR')}</td>
-                                <td className="px-8 py-4">{emp?.name}</td>
-                                <td className="px-8 py-4 text-center">{formatTime(r.clockIn)}</td>
-                                <td className="px-8 py-4 text-center">{formatTime(r.clockOut)}</td>
-                                <td className={`px-8 py-4 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{tbe ? formatMinutes(tbe.minutes) : '---'}</td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                   </div>
                 </div>
               )}
 
@@ -703,7 +633,7 @@ const App: React.FC = () => {
       {isLoginModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 backdrop-blur-md">
            <div className="bg-white w-full max-w-[340px] p-10 rounded-[3rem] shadow-2xl relative text-center">
-              <button onClick={() => setIsLoginModalOpen(false)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900"><X size={24}/></button>
+              <button type="button" onClick={() => setIsLoginModalOpen(false)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900"><X size={24}/></button>
               <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner"><Lock size={32}/></div>
               <h2 className="text-2xl font-black font-serif italic mb-1">Acesso Gerente</h2>
               <div className="flex justify-center gap-4 my-8">
@@ -713,7 +643,7 @@ const App: React.FC = () => {
               </div>
               <div className="grid grid-cols-3 gap-3">
                 {['1','2','3','4','5','6','7','8','9','C','0','<'].map(v => (
-                  <button key={v} onClick={() => v === 'C' ? setPinInput('') : v === '<' ? setPinInput(p => p.slice(0,-1)) : handlePinDigit(v)} className="h-14 rounded-xl font-black text-xl bg-slate-50 hover:bg-indigo-600 hover:text-white transition-all">{v}</button>
+                  <button key={v} type="button" onClick={() => v === 'C' ? setPinInput('') : v === '<' ? setPinInput(p => p.slice(0,-1)) : handlePinDigit(v)} className="h-14 rounded-xl font-black text-xl bg-slate-50 hover:bg-indigo-600 hover:text-white transition-all">{v}</button>
                 ))}
               </div>
            </div>
