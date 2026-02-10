@@ -199,16 +199,12 @@ const App: React.FC = () => {
     } catch (e) { alert("Erro de conexão."); }
   };
 
-  /**
-   * EXCLUSÃO REFORÇADA COM FEEDBACK DE RLS
-   */
   const handleDeleteFullRecord = async (recordId: string, employeeId: string, date: string) => {
     if (!supabase) return;
     
     if (confirm(`Deseja mesmo apagar o ponto e o saldo do dia ${new Date(date + "T12:00:00").toLocaleDateString('pt-BR')}?\n\nIsso removerá as batidas e recalculará o banco de horas.`)) {
       setIsSaving(true);
       try {
-        // 1. Tentar apagar o saldo primeiro
         const { error: errorTB } = await supabase
           .from('timeBank')
           .delete()
@@ -216,21 +212,14 @@ const App: React.FC = () => {
           .eq('date', date)
           .eq('type', 'WORK');
 
-        if (errorTB) {
-           console.error("Erro RLS TimeBank:", errorTB);
-           throw new Error(`O banco de dados recusou a exclusão do saldo. Verifique as permissões 'DELETE' na tabela 'timeBank' no painel do Supabase.`);
-        }
+        if (errorTB) throw new Error(`Erro ao excluir saldo: ${errorTB.message}. Verifique as permissões de DELETE.`);
 
-        // 2. Tentar apagar o registro de batidas
         const { error: errorRec } = await supabase
           .from('records')
           .delete()
           .eq('id', recordId);
 
-        if (errorRec) {
-           console.error("Erro RLS Records:", errorRec);
-           throw new Error(`O banco de dados recusou a exclusão das batidas. Verifique as permissões 'DELETE' na tabela 'records' no painel do Supabase.`);
-        }
+        if (errorRec) throw new Error(`Erro ao excluir batidas: ${errorRec.message}. Verifique as permissões de DELETE.`);
 
         await fetchData();
         alert("Ponto e saldo removidos com sucesso!");
@@ -306,7 +295,7 @@ const App: React.FC = () => {
     if (!supabase) return;
     if (confirm(message)) {
       const { error } = await supabase.from('timeBank').delete().eq('id', id);
-      if (error) alert("Não foi possível excluir. O Supabase provavelmente bloqueou o comando (RLS Policy). Erro: " + error.message);
+      if (error) alert("Não foi possível excluir. Erro: " + error.message);
       else await fetchData();
     }
   };
@@ -639,12 +628,12 @@ const App: React.FC = () => {
                       <div className="bg-amber-500 p-2 rounded-lg text-white"><AlertTriangle size={20}/></div>
                       <div>
                         <p className="text-amber-900 font-black text-xs uppercase mb-1">Checklist de Solução (Exclusão)</p>
-                        <p className="text-amber-700 text-[10px] leading-relaxed">
+                        <div className="text-amber-700 text-[10px] leading-relaxed">
                           Se o botão de lixeira falhar, siga estes passos no Supabase:<br/>
-                          1. Vá em <b>Authentication -> Policies</b><br/>
+                          1. Vá em <b>Authentication {'->'} Policies</b><br/>
                           2. Habilite <b>DELETE</b> para as tabelas <code>records</code> e <code>timeBank</code>.<br/>
                           3. A função deve ser <code>anon</code> ou <code>public</code>.
-                        </p>
+                        </div>
                       </div>
                     </div>
                   </div>
