@@ -23,7 +23,7 @@ import {
   Plus, RefreshCw, AlertCircle, CheckCircle2, Search,
   Calendar, BrainCircuit, HeartPulse, Palmtree, ShieldCheck,
   History, SlidersHorizontal, Info, Database, AlertTriangle,
-  GraduationCap, Briefcase
+  GraduationCap, Briefcase, Minus
 } from 'lucide-react';
 
 const SUPABASE_URL = "https://afpcoquiivzrckabcvzo.supabase.co" as string; 
@@ -674,46 +674,79 @@ const App: React.FC = () => {
               )}
 
               {activeTab === 'admin' && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                   <div className="lg:col-span-5">
-                    <div className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-100">
-                      <h2 className="text-3xl font-black font-serif italic mb-8 text-center">Ajuste de Saldo</h2>
+                    <div className="bg-white p-8 md:p-10 rounded-[2.5rem] md:rounded-[3rem] shadow-xl border border-slate-100 relative z-10">
+                      <h2 className="text-2xl md:text-3xl font-black font-serif italic mb-6 md:mb-8 text-center">Ajuste de Saldo</h2>
                       <form onSubmit={handleSaveAdjustment} className="space-y-6">
-                        <select required value={adjustmentForm.employeeId} onChange={e => setAdjustmentForm({...adjustmentForm, employeeId: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner">
-                          <option value="">Colaborador...</option>
-                          {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                        </select>
-                        <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="w-full p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner text-sm"/>
-                        <div className="flex items-center gap-4">
-                           <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, isPositive: !adjustmentForm.isPositive})} className={`p-4 rounded-xl font-black text-2xl w-16 shadow-md transition-all ${adjustmentForm.isPositive ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
-                             {adjustmentForm.isPositive ? '+' : '-'}
-                           </button>
-                           <input type="text" value={adjustmentForm.amountStr} onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} className="flex-1 p-8 rounded-[2rem] bg-slate-50 border-2 border-indigo-100 text-5xl font-mono font-black text-center text-slate-800 shadow-inner" placeholder="00:00"/>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Colaborador</label>
+                          <select required value={adjustmentForm.employeeId} onChange={e => setAdjustmentForm({...adjustmentForm, employeeId: e.target.value})} className="w-full p-4 md:p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="">Selecione...</option>
+                            {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                          </select>
                         </div>
-                        <button type="submit" disabled={isSaving} className="w-full py-6 bg-indigo-600 text-white rounded-3xl font-black uppercase text-sm shadow-2xl hover:bg-indigo-700 transition-all flex items-center justify-center gap-3">
-                          {isSaving ? <RefreshCw className="animate-spin"/> : <Plus/>} Aplicar Ajuste
-                        </button>
+                        
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Data do Ajuste</label>
+                          <input type="date" value={adjustmentForm.date} onChange={e => setAdjustmentForm({...adjustmentForm, date: e.target.value})} className="w-full p-4 md:p-5 rounded-2xl bg-slate-50 border border-slate-200 font-black text-slate-800 shadow-inner outline-none focus:ring-2 focus:ring-indigo-500 text-sm"/>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Valor (HH:mm)</label>
+                          <div className="flex items-stretch gap-3">
+                            <button type="button" onClick={() => setAdjustmentForm({...adjustmentForm, isPositive: !adjustmentForm.isPositive})} className={`flex-shrink-0 w-20 rounded-2xl font-black text-3xl shadow-md transition-all flex items-center justify-center ${adjustmentForm.isPositive ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                              {adjustmentForm.isPositive ? <Plus size={28}/> : <Minus size={28}/>}
+                            </button>
+                            <div className="flex-1 bg-slate-50 rounded-[2rem] border-2 border-indigo-100 shadow-inner flex items-center justify-center p-4">
+                              <input 
+                                type="text" 
+                                value={adjustmentForm.amountStr} 
+                                onChange={e => setAdjustmentForm({...adjustmentForm, amountStr: e.target.value})} 
+                                className="w-full bg-transparent text-5xl font-mono font-black text-center text-slate-800 outline-none placeholder:text-slate-200" 
+                                placeholder="00:00"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-[9px] text-center text-slate-400 font-bold uppercase tracking-widest mt-1">Sinal + ou - indica acréscimo ou débito</p>
+                        </div>
+
+                        <div className="pt-2">
+                          <button type="submit" disabled={isSaving} className="w-full py-5 md:py-6 bg-indigo-600 text-white rounded-[2rem] font-black uppercase text-xs md:text-sm shadow-2xl hover:bg-indigo-700 active:scale-[0.97] transition-all flex items-center justify-center gap-3">
+                            {isSaving ? <RefreshCw className="animate-spin"/> : <CheckCircle2 size={18}/>} APLICAR AJUSTE
+                          </button>
+                        </div>
                       </form>
                     </div>
                   </div>
-                  <div className="lg:col-span-7 bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100">
-                    <div className="flex justify-between items-center mb-6"><h3 className="text-xl font-black font-serif italic">Histórico de Ajustes</h3> <History className="text-slate-300" size={24}/></div>
-                    <div className="space-y-3 overflow-y-auto max-h-[500px]">
+
+                  <div className="lg:col-span-7 bg-white p-6 md:p-8 rounded-[2.5rem] md:rounded-[3rem] shadow-sm border border-slate-100 h-fit">
+                    <div className="flex justify-between items-center mb-6 px-2">
+                      <h3 className="text-xl font-black font-serif italic">Histórico de Ajustes</h3> 
+                      <History className="text-indigo-400" size={20}/>
+                    </div>
+                    <div className="space-y-3 overflow-y-auto max-h-[550px] pr-2 custom-scrollbar">
                        {data.timeBank.filter(t => ['WORK_RETRO', 'ADJUSTMENT', 'BONUS'].includes(t.type)).map(t => {
                           const emp = data.employees.find(e => e.id === t.employeeId);
                           return (
-                            <div key={t.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex justify-between items-center">
+                            <div key={t.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex justify-between items-center hover:bg-white hover:border-indigo-100 transition-all">
                                <div>
                                   <p className="font-black text-slate-800 text-xs">{emp?.name}</p>
-                                  <span className="text-[10px] text-slate-400">{safeFormatDate(t.date)}</span>
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase">{safeFormatDate(t.date)} • {ENTRY_TYPE_LABELS[t.type]}</span>
                                </div>
                                <div className="flex items-center gap-4">
                                   <p className={`font-mono font-black ${t.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatMinutes(t.minutes)}</p>
-                                  <button onClick={() => handleDeleteEntry(t.id, "Remover?")} className="text-slate-300 hover:text-rose-500 transition-all"><Trash2 size={16}/></button>
+                                  <button onClick={() => handleDeleteEntry(t.id, "Remover este ajuste?")} className="text-slate-300 hover:text-rose-500 transition-all p-2"><Trash2 size={16}/></button>
                                </div>
                             </div>
                           )
                        })}
+                       {data.timeBank.filter(t => ['WORK_RETRO', 'ADJUSTMENT', 'BONUS'].includes(t.type)).length === 0 && (
+                         <div className="text-center py-20 flex flex-col items-center opacity-30">
+                           <SlidersHorizontal size={40} className="mb-2"/>
+                           <p className="text-xs font-black uppercase">Nenhum ajuste registrado</p>
+                         </div>
+                       )}
                     </div>
                   </div>
                 </div>
