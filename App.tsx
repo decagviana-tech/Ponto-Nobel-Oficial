@@ -22,7 +22,8 @@ import {
   TrendingUp, Users, Settings, BookOpen, Sparkles, 
   Plus, RefreshCw, AlertCircle, CheckCircle2, Search,
   Calendar, BrainCircuit, HeartPulse, Palmtree, ShieldCheck,
-  History, SlidersHorizontal, Info, Database, AlertTriangle
+  History, SlidersHorizontal, Info, Database, AlertTriangle,
+  GraduationCap, Briefcase
 } from 'lucide-react';
 
 const SUPABASE_URL = "https://afpcoquiivzrckabcvzo.supabase.co" as string; 
@@ -139,7 +140,7 @@ const App: React.FC = () => {
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = getLocalDateString(yesterday);
 
-    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 4000) {
+    while (getLocalDateString(loopDate) <= yesterdayStr && maxSafety < 4500) {
       maxSafety++;
       const dateKey = getLocalDateString(loopDate);
       const dayEntries = entriesMap.get(dateKey) || [];
@@ -456,7 +457,15 @@ const App: React.FC = () => {
               {activeTab === 'employees' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                   <div className="lg:col-span-5 bg-white p-8 rounded-[2.5rem] shadow-lg border border-slate-100">
-                    <h2 className="text-xl font-black font-serif italic mb-6">Cadastro / Edição de Colaborador</h2>
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                        {editingEmployeeId ? <Edit2 size={20}/> : <UserPlus size={20}/>}
+                      </div>
+                      <h2 className="text-xl font-black font-serif italic">
+                        {editingEmployeeId ? 'Editar Colaborador' : 'Novo Cadastro'}
+                      </h2>
+                    </div>
+                    
                     <form onSubmit={async (e) => {
                       e.preventDefault();
                       if(!supabase) return;
@@ -485,72 +494,82 @@ const App: React.FC = () => {
                         setNewEmp({ name:'', role:'', dailyHours:'8', englishDay:'6', shortDayHours:'4', initialBalanceStr:'00:00', isHourly:false, startDate: DEFAULT_START_DATE }); 
                         await fetchData();
                       } catch (err: any) {
-                        alert("ERRO NO BANCO: " + err.message);
+                        alert("ERRO: " + err.message);
                       } finally {
                         setIsSaving(false);
                       }
                     }} className="space-y-4">
                       <div className="space-y-1">
-                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Nome do Colaborador</label>
-                        <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Nome Completo"/>
+                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Nome Completo</label>
+                        <input required value={newEmp.name} onChange={e => setNewEmp({...newEmp, name:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition-all" placeholder="Nome do funcionário"/>
                       </div>
+
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
-                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Cargo / Função</label>
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Cargo</label>
                           <input required value={newEmp.role} onChange={e => setNewEmp({...newEmp, role:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-sm" placeholder="Ex: Vendedor"/>
                         </div>
                         <div className="space-y-1">
-                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Tipo Contrato</label>
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Regime</label>
                           <select value={newEmp.isHourly ? 'H' : 'C'} onChange={e => setNewEmp({...newEmp, isHourly: e.target.value === 'H'})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm">
-                            <option value="C">CLT / Estágio</option>
+                            <option value="C">CLT / Estagiário</option>
                             <option value="H">Horista (Sem Meta)</option>
                           </select>
                         </div>
                       </div>
 
                       {!newEmp.isHourly && (
-                        <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-4">
-                          <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest text-center">Configuração de Jornada (Semana Inglesa)</p>
+                        <div className="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100 space-y-4">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Briefcase size={12} className="text-indigo-600"/>
+                            <p className="text-[9px] font-black text-indigo-600 uppercase tracking-widest">Jornada de Trabalho</p>
+                          </div>
                           <div className="grid grid-cols-2 gap-3">
                             <div className="space-y-1">
                               <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Meta Diária (h)</label>
-                              <input type="number" value={newEmp.dailyHours} onChange={e => setNewEmp({...newEmp, dailyHours:e.target.value})} className="w-full p-4 rounded-xl bg-white border border-slate-100 font-black text-sm"/>
+                              <input type="number" step="0.5" value={newEmp.dailyHours} onChange={e => setNewEmp({...newEmp, dailyHours:e.target.value})} className="w-full p-4 rounded-xl bg-white border border-slate-100 font-black text-sm" placeholder="Ex: 8 ou 6"/>
                             </div>
                             <div className="space-y-1">
-                              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Dia Curto (4h)</label>
+                              <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Folga/Dia Curto</label>
                               <select value={newEmp.englishDay} onChange={e => setNewEmp({...newEmp, englishDay:parseInt(e.target.value) as any})} className="w-full p-4 rounded-xl bg-white border border-slate-100 font-black text-sm">
                                 {WEEK_DAYS_BR.map((d,i) => <option key={i} value={i}>{d}</option>)}
                               </select>
                             </div>
                           </div>
                           <div className="space-y-1">
-                            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Carga Horária no Dia Curto (h)</label>
-                            <input type="number" value={newEmp.shortDayHours} onChange={e => setNewEmp({...newEmp, shortDayHours:e.target.value})} className="w-full p-4 rounded-xl bg-white border border-slate-100 font-black text-sm"/>
+                            <div className="flex justify-between items-center px-2">
+                              <label className="text-[9px] font-black text-slate-400 uppercase">Horas no Dia Curto</label>
+                              {parseInt(newEmp.shortDayHours) === 0 && (
+                                <span className="text-[8px] font-black text-amber-600 uppercase">Semana de 5 dias (Sábado Off)</span>
+                              )}
+                            </div>
+                            <input type="number" step="0.5" value={newEmp.shortDayHours} onChange={e => setNewEmp({...newEmp, shortDayHours:e.target.value})} className="w-full p-4 rounded-xl bg-white border border-slate-100 font-black text-sm" placeholder="0 para folga total"/>
                           </div>
+                          <p className="text-[8px] text-slate-400 italic">Dica: Para estagiários que trabalham 5 dias por semana, defina a Folga como Sábado e Carga Horária como 0.</p>
                         </div>
                       )}
 
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1">
-                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Início do Cálculo</label>
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Data de Início</label>
                           <input type="date" required value={newEmp.startDate} onChange={e => setNewEmp({...newEmp, startDate:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm"/>
                         </div>
                         <div className="space-y-1">
-                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Saldo Inicial (HH:mm)</label>
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Saldo Atual (HH:mm)</label>
                           <input type="text" value={newEmp.initialBalanceStr} onChange={e => setNewEmp({...newEmp, initialBalanceStr:e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-sm" placeholder="00:00"/>
                         </div>
                       </div>
 
-                      <div className="flex gap-2 mt-4">
-                        <button type="submit" disabled={isSaving} className="flex-1 py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all">
+                      <div className="flex gap-2 pt-2">
+                        <button type="submit" disabled={isSaving} className="flex-1 py-4 bg-indigo-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg flex items-center justify-center gap-2 hover:bg-indigo-700 active:scale-[0.98] transition-all">
                           {isSaving ? <RefreshCw className="animate-spin" size={14}/> : <CheckCircle2 size={14}/>} 
-                          {editingEmployeeId ? 'Salvar Alterações' : 'Cadastrar Funcionário'}
+                          {editingEmployeeId ? 'Salvar Alterações' : 'Cadastrar Colaborador'}
                         </button>
                         {editingEmployeeId && (
                           <button type="button" onClick={() => {
                             setEditingEmployeeId(null);
                             setNewEmp({ name:'', role:'', dailyHours:'8', englishDay:'6', shortDayHours:'4', initialBalanceStr:'00:00', isHourly:false, startDate: DEFAULT_START_DATE });
-                          }} className="px-6 py-4 bg-slate-200 text-slate-600 rounded-xl font-black uppercase text-[10px]">Cancelar</button>
+                          }} className="px-6 py-4 bg-slate-200 text-slate-600 rounded-xl font-black uppercase text-[10px] hover:bg-slate-300 transition-all">Cancelar</button>
                         )}
                       </div>
                     </form>
@@ -558,31 +577,40 @@ const App: React.FC = () => {
 
                   <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4 h-fit">
                     {data.employees.map(emp => (
-                      <div key={emp.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between group hover:border-indigo-200 transition-all">
+                      <div key={emp.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex items-center justify-between group hover:border-indigo-200 hover:shadow-md transition-all">
                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-slate-100 text-slate-500 rounded-xl flex items-center justify-center font-black group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-all">{emp.name.charAt(0)}</div>
+                            <div className="w-12 h-12 bg-slate-100 text-slate-500 rounded-xl flex items-center justify-center font-black group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-all">
+                              {emp.role.toLowerCase().includes('estagi') ? <GraduationCap size={24}/> : emp.name.charAt(0)}
+                            </div>
                             <div>
-                              <p className="font-black text-slate-800 text-sm">{emp.name}</p>
-                              <p className="text-[8px] font-bold text-indigo-500 uppercase">{emp.role} {emp.isHourly ? '• Horista' : ''}</p>
-                              <p className="text-[8px] font-black text-slate-300 uppercase mt-0.5">Início: {safeFormatDate(emp.startDate)}</p>
+                              <p className="font-black text-slate-800 text-sm leading-tight">{emp.name}</p>
+                              <p className="text-[9px] font-bold text-slate-400 uppercase mt-0.5">{emp.role}</p>
+                              <div className="flex flex-wrap gap-x-2 mt-1">
+                                <span className="text-[8px] font-black text-indigo-500 uppercase">
+                                  {emp.isHourly ? 'Horista' : `${emp.baseDailyMinutes/60}h • ${emp.englishWeekMinutes === 0 ? '5 dias' : '6 dias'}`}
+                                </span>
+                                <span className="text-[8px] font-black text-slate-300 uppercase">Início: {safeFormatDate(emp.startDate)}</span>
+                              </div>
                             </div>
                          </div>
                          <div className="flex gap-2">
                             <button onClick={() => {
                                setEditingEmployeeId(emp.id);
                                setNewEmp({
-                                 name: emp.name, role: emp.role, dailyHours: (emp.baseDailyMinutes/60).toString(),
+                                 name: emp.name, role: emp.role, 
+                                 dailyHours: (emp.baseDailyMinutes/60).toString(),
                                  englishDay: emp.englishWeekDay.toString() as any, 
                                  shortDayHours: (emp.englishWeekMinutes/60).toString(),
                                  initialBalanceStr: formatMinutes(emp.initialBalanceMinutes).replace('+', '').replace('-', '').replace('h ', ':').replace('m', '').trim(),
-                                 startDate: (emp.startDate || '').split('T')[0], isHourly: emp.isHourly || false
+                                 startDate: (emp.startDate || '').split('T')[0], 
+                                 isHourly: emp.isHourly || false
                                });
-                            }} className="p-2 bg-slate-50 text-slate-400 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"><Edit2 size={16}/></button>
+                            }} className="p-2 bg-slate-50 text-slate-400 rounded-lg hover:bg-indigo-600 hover:text-white transition-all" title="Editar"><Edit2 size={16}/></button>
                             <button onClick={async () => { 
                               if(confirm(`Remover permanentemente ${emp.name}?`)) { 
                                 await supabase!.from('employees').delete().eq('id', emp.id); fetchData();
                               } 
-                            }} className="p-2 bg-slate-50 text-rose-300 rounded-lg hover:bg-rose-600 hover:text-white transition-all"><Trash2 size={16}/></button>
+                            }} className="p-2 bg-slate-50 text-rose-300 rounded-lg hover:bg-rose-600 hover:text-white transition-all" title="Excluir"><Trash2 size={16}/></button>
                          </div>
                       </div>
                     ))}

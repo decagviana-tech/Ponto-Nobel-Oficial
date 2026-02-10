@@ -4,7 +4,7 @@ import { Employee, ClockRecord, EntryType } from './types';
 export const ENTRY_TYPE_LABELS: Record<EntryType, string> = {
   WORK: 'Trabalho (Ponto)',
   MEDICAL: 'Atestado Médico',
-  HOLIDAY: 'Feriado',
+  HOLIDAY: 'FERIADO',
   ADJUSTMENT: 'Ajuste Manual',
   PAYMENT: 'Pagamento/Saída',
   VACATION: 'Férias',
@@ -25,7 +25,6 @@ export const getLocalDateString = (date: Date): string => {
 
 /**
  * Gera uma string ISO completa com o Offset do fuso horário local.
- * Isso impede que o Supabase (Postgres) desloque o horário em -3h.
  */
 export const getLocalISOString = (date: Date): string => {
   const tzo = -date.getTimezoneOffset();
@@ -67,13 +66,11 @@ export const parseTimeStringToMinutes = (timeStr: string): number => {
 
 export const formatTime = (dateString: string | null | undefined): string => {
   if (!dateString) return '--:--';
-  // Se já for apenas HH:mm
   if (dateString.length === 5 && dateString.includes(':')) return dateString;
   
   const date = new Date(dateString);
   if (isNaN(date.getTime())) return '--:--';
   
-  // Forçar o horário local na exibição
   return date.toLocaleTimeString('pt-BR', { 
     hour: '2-digit', 
     minute: '2-digit',
@@ -84,10 +81,17 @@ export const formatTime = (dateString: string | null | undefined): string => {
 export const getExpectedMinutesForDate = (employee: Employee, date: Date): number => {
   if (employee.isHourly) return 0; 
   const dayOfWeek = date.getDay();
-  if (dayOfWeek === 0) return 0; // Domingo
+  
+  // Domingo é sempre 0
+  if (dayOfWeek === 0) return 0; 
+  
+  // Se for o dia configurado como "Dia Curto/Folga Fixa"
   if (dayOfWeek === employee.englishWeekDay) {
-    return employee.englishWeekMinutes || 240; 
+    // Retorna o valor configurado, mesmo que seja 0 (caso de quem não trabalha no sábado)
+    return employee.englishWeekMinutes !== undefined ? employee.englishWeekMinutes : 240;
   }
+  
+  // Dias normais (Seg-Sex)
   return employee.baseDailyMinutes || 480;
 };
 
