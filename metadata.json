@@ -1,0 +1,7 @@
+{
+  "name": "Nobel Petrópolis - Ponto & Banco",
+  "description": "Um sistema inteligente de controle de jornada e banco de horas para a Livraria Nobel Petrópolis, com análise via IA Gemini.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
