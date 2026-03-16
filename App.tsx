@@ -447,7 +447,9 @@ const App: React.FC = () => {
                               <thead className="bg-slate-50 text-[8px] font-black uppercase text-slate-400 border-b border-slate-100">
                                 <tr>
                                   <th className="px-6 py-3">Data</th>
-                                  <th className="px-6 py-3">Entrada / Saída</th>
+                                  <th className="px-6 py-3">Entrada/Saída</th>
+                                  <th className="px-6 py-3 text-center">Almoço</th>
+                                  <th className="px-6 py-3 text-center">Lanche</th>
                                   <th className="px-6 py-3 text-center">Saldo</th>
                                 </tr>
                               </thead>
@@ -460,8 +462,14 @@ const App: React.FC = () => {
                                     return (
                                       <tr key={r.id}>
                                         <td className="px-6 py-3 font-mono text-slate-500">{safeFormatDate(r.date)}</td>
-                                        <td className="px-6 py-3 text-slate-700">
+                                        <td className="px-6 py-3 text-slate-700 whitespace-nowrap">
                                           {formatTime(r.clockIn)} - {formatTime(r.clockOut)}
+                                        </td>
+                                        <td className="px-6 py-3 text-center text-slate-400 font-mono">
+                                          {r.lunchStart ? `${formatTime(r.lunchStart)}-${formatTime(r.lunchEnd)}` : '---'}
+                                        </td>
+                                        <td className="px-6 py-3 text-center text-slate-400 font-mono">
+                                          {r.snackStart ? `${formatTime(r.snackStart)}-${formatTime(r.snackEnd)}` : '---'}
                                         </td>
                                         <td className={`px-6 py-3 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                           {tbe ? formatMinutes(tbe.minutes) : '--:--'}
