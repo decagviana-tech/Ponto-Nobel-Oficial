@@ -430,6 +430,9 @@ const App: React.FC = () => {
                              ))}
                           </div>
                         </div>
+                        <div className="bg-[#1e293b] text-white p-8 rounded-[2.5rem] flex flex-col items-center justify-center shadow-xl text-center relative overflow-hidden">
+                          <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2 relative z-10">Saldo Acumulado</p>
+                          <p className={`text-5xl font-mono font-black relative z-10 ${balance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatMinutes(balance)}</p>
                           <div className="absolute top-0 right-0 p-4 opacity-5"><ClockIcon size={120}/></div>
                         </div>
 
