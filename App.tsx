@@ -573,7 +573,7 @@ const App: React.FC = () => {
                                         <tr key={`abs-${t.id}-${index}`} className="bg-indigo-50/40">
                                           <td className="px-6 py-3 font-mono text-slate-500">{safeFormatDate(t.date)}</td>
                                           <td colSpan={3} className="px-6 py-3 text-center text-indigo-600 font-black uppercase text-[9px] tracking-widest">
-                                            {ENTRY_TYPE_LABELS[t.type]} {t.note && t.note !== 'Abono/Justificativa' && t.note !== 'Abono' ? `• ${t.note}` : ''}
+                                            {ENTRY_TYPE_LABELS[t.type as keyof typeof ENTRY_TYPE_LABELS]} {t.note && t.note !== 'Abono/Justificativa' && t.note !== 'Abono' ? `• ${t.note}` : ''}
                                           </td>
                                           <td className="px-6 py-3 text-center font-mono text-slate-400">
                                             Abonado
@@ -615,7 +615,7 @@ const App: React.FC = () => {
                                     .map(t => (
                                       <tr key={t.id}>
                                         <td className="px-6 py-3 font-mono text-slate-500">{safeFormatDate(t.date)}</td>
-                                        <td className="px-6 py-3 text-indigo-700">{ENTRY_TYPE_LABELS[t.type] || t.type}</td>
+                                        <td className="px-6 py-3 text-indigo-700">{ENTRY_TYPE_LABELS[t.type as keyof typeof ENTRY_TYPE_LABELS] || t.type}</td>
                                         <td className="px-6 py-3 text-slate-500 italic truncate max-w-[150px]">{t.note || '---'}</td>
                                         <td className={`px-6 py-3 text-center font-mono ${t.minutes > 0 ? 'text-emerald-500' : t.minutes < 0 ? 'text-rose-500' : 'text-slate-400'}`}>
                                           {t.minutes !== 0 ? formatMinutes(t.minutes) : 'Abonado/Neutro'}
@@ -859,7 +859,7 @@ const App: React.FC = () => {
                                return (
                                  <tr key={t.id} className="text-slate-700">
                                    <td className="px-8 py-4">{emp?.name}</td>
-                                   <td className="px-8 py-4">{ENTRY_TYPE_LABELS[t.type]}</td>
+                                   <td className="px-8 py-4">{ENTRY_TYPE_LABELS[t.type as keyof typeof ENTRY_TYPE_LABELS]}</td>
                                    <td className="px-8 py-4 font-mono">{safeFormatDate(t.date)}</td>
                                    <td className="px-8 py-4 text-center">
                                       <button onClick={() => handleDeleteEntry(t.id, "Remover?")} className="text-rose-400 hover:text-rose-600 p-2"><Trash2 size={16}/></button>
