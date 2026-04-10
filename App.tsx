@@ -62,7 +62,8 @@ const App: React.FC = () => {
     date: getLocalDateString(new Date()),
     amountStr: '00:00',
     type: 'ADJUSTMENT' as EntryType,
-    isPositive: true
+    isPositive: true,
+    note: ''
   });
 
   const [justificationForm, setJustificationForm] = useState({
@@ -244,10 +245,10 @@ const App: React.FC = () => {
         date: adjustmentForm.date,
         minutes: finalMinutes,
         type: adjustmentForm.type,
-        note: 'Ajuste manual administrativo'
+        note: adjustmentForm.note.trim() || 'Ajuste manual administrativo'
       }]);
       if (error) throw error;
-      setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00' });
+      setAdjustmentForm({ ...adjustmentForm, amountStr: '00:00', note: '' });
       await fetchData();
       alert("Ajuste aplicado com sucesso!");
     } catch (err: any) { alert("Erro: " + err.message); } finally { setIsSaving(false); }
@@ -263,9 +264,10 @@ const App: React.FC = () => {
         date: justificationForm.date,
         minutes: 0, 
         type: justificationForm.type,
-        note: justificationForm.note
+        note: justificationForm.note.trim() || 'Abono/Justificativa'
       }]);
       if (error) throw error;
+      setJustificationForm({ ...justificationForm, note: '' });
       await fetchData();
       alert("Abono registrado!");
     } catch (err: any) { alert("Erro: " + err.message); } finally { setIsSaving(false); }
@@ -281,23 +283,85 @@ const App: React.FC = () => {
   };
 
   const handleExportAccountantReport = () => {
-    const mapped = filteredRecords.map(r => {
-      const emp = data.employees.find(e => e.id === r.employeeId);
-      const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+    // Coletar todas as datas e funcionários relevantes (tanto de records quanto de timeBank)
+    const entriesMap = new Map<string, { empId: string, date: string }>();
+
+    data.records.forEach(r => {
+      const isDateInRange = r.date >= reportFilter.startDate && r.date <= reportFilter.endDate;
+      const isEmployeeMatch = reportFilter.employeeId === 'all' || r.employeeId === reportFilter.employeeId;
+      if (isDateInRange && isEmployeeMatch) {
+        entriesMap.set(`${r.employeeId}_${r.date}`, { empId: r.employeeId, date: r.date });
+      }
+    });
+
+    data.timeBank.forEach(t => {
+      const isDateInRange = t.date >= reportFilter.startDate && t.date <= reportFilter.endDate;
+      const isEmployeeMatch = reportFilter.employeeId === 'all' || t.employeeId === reportFilter.employeeId;
+      if (isDateInRange && isEmployeeMatch) {
+        entriesMap.set(`${t.employeeId}_${t.date}`, { empId: t.employeeId, date: t.date });
+      }
+    });
+
+    // Converter para array e ordenar (nome asc, data desc)
+    const entriesList = Array.from(entriesMap.values()).sort((a, b) => {
+       const empA = data.employees.find(e => e.id === a.empId)?.name || '';
+       const empB = data.employees.find(e => e.id === b.empId)?.name || '';
+       if (empA > empB) return 1;
+       if (empA < empB) return -1;
+       return a.date > b.date ? -1 : 1;
+    });
+
+    const mapped = entriesList.map(entry => {
+      const r = data.records.find(rx => rx.employeeId === entry.empId && rx.date === entry.date);
+      const emp = data.employees.find(e => e.id === entry.empId);
+      
+      const dayTimeBank = data.timeBank.filter(t => t.employeeId === entry.empId && t.date === entry.date);
+      const workEntry = dayTimeBank.find(t => t.type === 'WORK');
+      const otherEntries = dayTimeBank.filter(t => t.type !== 'WORK');
+      
+      const expected = r?.expectedMinutes ?? (emp ? getExpectedMinutesForDate(emp as any, new Date(entry.date + "T12:00:00")) : 0);
+      const workedMins = workEntry ? (workEntry.minutes + expected) : 0;
+      
+      let adjustmentMins = 0;
+      let notes: string[] = [];
+      let isAbscence = false;
+
+      otherEntries.forEach(t => {
+         adjustmentMins += t.minutes;
+         if (['MEDICAL', 'VACATION', 'HOLIDAY', 'OFF_DAY'].includes(t.type)) {
+           isAbscence = true;
+         }
+         const label = ENTRY_TYPE_LABELS[t.type as keyof typeof ENTRY_TYPE_LABELS] || t.type;
+         notes.push(`${label}${t.note && t.note !== 'Abono/Justificativa' && t.note !== 'Abono' ? ' (' + t.note + ')' : ''}`);
+      });
+
+      let dailyBalance = 0;
+      if (workEntry) {
+         dailyBalance += workEntry.minutes;
+      } else {
+         if (expected > 0 && !isAbscence) {
+            dailyBalance -= expected;
+         }
+      }
+      dailyBalance += adjustmentMins;
+
       return {
         'Funcionário': emp?.name || '---',
-        'Data': new Date(r.date + "T12:00:00").toLocaleDateString('pt-BR'),
-        'Entrada': formatTime(r.clockIn),
-        'Início Almoço': formatTime(r.lunchStart),
-        'Retorno Almoço': formatTime(r.lunchEnd),
-        'Início Lanche': formatTime(r.snackStart),
-        'Retorno Lanche': formatTime(r.snackEnd),
-        'Saída Final': formatTime(r.clockOut),
-        'Meta do Dia': formatMinutes(r.expectedMinutes || 0),
-        'Total Trabalhado': tbe ? formatMinutes((tbe.minutes || 0) + (r.expectedMinutes || 0)) : '---',
-        'Saldo do Dia': tbe ? formatMinutes(tbe.minutes) : '---'
+        'Data': new Date(entry.date + "T12:00:00").toLocaleDateString('pt-BR'),
+        'Entrada': r ? formatTime(r.clockIn) : '---',
+        'Início Almoço': r ? formatTime(r.lunchStart) : '---',
+        'Retorno Almoço': r ? formatTime(r.lunchEnd) : '---',
+        'Início Lanche': r ? formatTime(r.snackStart) : '---',
+        'Retorno Lanche': r ? formatTime(r.snackEnd) : '---',
+        'Saída Final': r ? formatTime(r.clockOut) : '---',
+        'Meta do Dia': formatMinutes(expected),
+        'Total Trabalhado': (r || workEntry) ? formatMinutes(workedMins) : '---',
+        'Justificativas / Abonos': notes.length > 0 ? notes.join(' | ') : '---',
+        'Horas de Ajuste': adjustmentMins !== 0 ? formatMinutes(adjustmentMins) : (isAbscence ? 'Abonado/Neutro' : '---'),
+        'Saldo do Dia': formatMinutes(dailyBalance)
       };
     });
+    
     exportToCSV(mapped, 'Relatorio_Nobel_Completo');
   };
 
@@ -454,39 +518,116 @@ const App: React.FC = () => {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-50">
-                                {data.records
-                                  .filter(r => r.employeeId === emp.id)
-                                  .slice(0, 15)
-                                  .map(r => {
-                                    const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+                                {(() => {
+                                  const timelineItems: any[] = [];
+                                  
+                                  // Add clock records
+                                  data.records.filter(r => r.employeeId === emp.id).forEach(r => {
+                                    timelineItems.push({ type: 'RECORD', date: r.date, data: r });
+                                  });
+
+                                  // Add absences and justifications
+                                  data.timeBank
+                                    .filter(t => t.employeeId === emp.id && ['MEDICAL', 'VACATION', 'HOLIDAY', 'OFF_DAY'].includes(t.type))
+                                    .forEach(t => {
+                                      timelineItems.push({ type: 'ABSENCE', date: t.date, data: t });
+                                    });
+
+                                  // Sort by date descending
+                                  timelineItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || (a.type === 'RECORD' ? -1 : 1));
+
+                                  const itemsToShow = timelineItems.slice(0, 15);
+
+                                  if (itemsToShow.length === 0) {
                                     return (
-                                      <tr key={r.id}>
-                                        <td className="px-6 py-3 font-mono text-slate-500">{safeFormatDate(r.date)}</td>
-                                        <td className="px-6 py-3 text-slate-700 whitespace-nowrap">
-                                          {formatTime(r.clockIn)} - {formatTime(r.clockOut)}
-                                        </td>
-                                        <td className="px-6 py-3 text-center text-slate-400 font-mono">
-                                          {r.lunchStart ? `${formatTime(r.lunchStart)}-${formatTime(r.lunchEnd)}` : '---'}
-                                        </td>
-                                        <td className="px-6 py-3 text-center text-slate-400 font-mono">
-                                          {r.snackStart ? `${formatTime(r.snackStart)}-${formatTime(r.snackEnd)}` : '---'}
-                                        </td>
-                                        <td className={`px-6 py-3 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                          {tbe ? formatMinutes(tbe.minutes) : '--:--'}
-                                        </td>
+                                      <tr>
+                                        <td colSpan={5} className="px-6 py-8 text-center text-slate-300 italic">Nenhum registro encontrado</td>
                                       </tr>
                                     );
-                                  })
-                                }
-                                {data.records.filter(r => r.employeeId === emp.id).length === 0 && (
-                                  <tr>
-                                    <td colSpan={3} className="px-6 py-8 text-center text-slate-300 italic">Nenhum registro encontrado</td>
-                                  </tr>
-                                )}
+                                  }
+
+                                  return itemsToShow.map((item, index) => {
+                                    if (item.type === 'RECORD') {
+                                      const r = item.data;
+                                      const tbe = data.timeBank.find(t => t.employeeId === r.employeeId && t.date === r.date && t.type === 'WORK');
+                                      return (
+                                        <tr key={`rec-${r.id}-${index}`}>
+                                          <td className="px-6 py-3 font-mono text-slate-500">{safeFormatDate(r.date)}</td>
+                                          <td className="px-6 py-3 text-slate-700 whitespace-nowrap">
+                                            {formatTime(r.clockIn)} - {formatTime(r.clockOut)}
+                                          </td>
+                                          <td className="px-6 py-3 text-center text-slate-400 font-mono">
+                                            {r.lunchStart ? `${formatTime(r.lunchStart)}-${formatTime(r.lunchEnd)}` : '---'}
+                                          </td>
+                                          <td className="px-6 py-3 text-center text-slate-400 font-mono">
+                                            {r.snackStart ? `${formatTime(r.snackStart)}-${formatTime(r.snackEnd)}` : '---'}
+                                          </td>
+                                          <td className={`px-6 py-3 text-center font-mono ${tbe && tbe.minutes >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                            {tbe ? formatMinutes(tbe.minutes) : '--:--'}
+                                          </td>
+                                        </tr>
+                                      );
+                                    } else {
+                                      const t = item.data;
+                                      return (
+                                        <tr key={`abs-${t.id}-${index}`} className="bg-indigo-50/40">
+                                          <td className="px-6 py-3 font-mono text-slate-500">{safeFormatDate(t.date)}</td>
+                                          <td colSpan={3} className="px-6 py-3 text-center text-indigo-600 font-black uppercase text-[9px] tracking-widest">
+                                            {ENTRY_TYPE_LABELS[t.type]} {t.note && t.note !== 'Abono/Justificativa' && t.note !== 'Abono' ? `• ${t.note}` : ''}
+                                          </td>
+                                          <td className="px-6 py-3 text-center font-mono text-slate-400">
+                                            Abonado
+                                          </td>
+                                        </tr>
+                                      );
+                                    }
+                                  });
+                                })()}
                               </tbody>
                             </table>
                           </div>
                         </div>
+
+                        {/* Employee Adjustments and Justifications Table */}
+                        {data.timeBank.filter(t => t.employeeId === emp.id && t.type !== 'WORK').length > 0 && (
+                          <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden mt-6">
+                            <div className="bg-indigo-50/50 px-6 py-4 border-b border-indigo-100 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <h3 className="text-sm font-black uppercase text-indigo-800 tracking-widest">Ajustes e Abonos</h3>
+                                <span className="bg-indigo-600 text-white text-[8px] px-2 py-0.5 rounded-full uppercase tracking-widest">Ciência do Colaborador</span>
+                              </div>
+                              <Info size={16} className="text-indigo-400"/>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left text-[10px] font-bold">
+                                <thead className="bg-slate-50 text-[8px] font-black uppercase text-slate-400 border-b border-slate-100">
+                                  <tr>
+                                    <th className="px-6 py-3">Data</th>
+                                    <th className="px-6 py-3">Tipo / Descrição</th>
+                                    <th className="px-6 py-3">Anotação Gerencial</th>
+                                    <th className="px-6 py-3 text-center">Impacto (Horas)</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                  {data.timeBank
+                                    .filter(t => t.employeeId === emp.id && t.type !== 'WORK')
+                                    .slice(0, 15)
+                                    .map(t => (
+                                      <tr key={t.id}>
+                                        <td className="px-6 py-3 font-mono text-slate-500">{safeFormatDate(t.date)}</td>
+                                        <td className="px-6 py-3 text-indigo-700">{ENTRY_TYPE_LABELS[t.type] || t.type}</td>
+                                        <td className="px-6 py-3 text-slate-500 italic truncate max-w-[150px]">{t.note || '---'}</td>
+                                        <td className={`px-6 py-3 text-center font-mono ${t.minutes > 0 ? 'text-emerald-500' : t.minutes < 0 ? 'text-rose-500' : 'text-slate-400'}`}>
+                                          {t.minutes !== 0 ? formatMinutes(t.minutes) : 'Abonado/Neutro'}
+                                        </td>
+                                      </tr>
+                                    ))
+                                  }
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -699,6 +840,7 @@ const App: React.FC = () => {
                           </button>
                         ))}
                       </div>
+                      <input required type="text" placeholder="Justificativa (obrigatório, ex: CID, Erro Ponto)" value={justificationForm.note} onChange={e => setJustificationForm({...justificationForm, note: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-bold text-xs outline-none focus:ring-2 focus:ring-indigo-500" />
                       <button type="submit" disabled={isSaving} className="w-full py-5 bg-[#0f172a] text-white rounded-2xl font-black uppercase text-xs shadow-xl flex items-center justify-center gap-3">
                          {isSaving ? <RefreshCw className="animate-spin" size={16}/> : <Plus size={16}/>} Lançar Abono
                       </button>
@@ -765,6 +907,11 @@ const App: React.FC = () => {
                               placeholder="00:00"
                             />
                           </div>
+                        </div>
+
+                        <div className="space-y-1 mt-4">
+                          <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Observação / Justificativa</label>
+                          <input required type="text" placeholder="Ex: Esquecimento, Acerto Bônus..." value={adjustmentForm.note} onChange={e => setAdjustmentForm({...adjustmentForm, note: e.target.value})} className="w-full p-3 rounded-xl bg-slate-50 border border-slate-200 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500"/>
                         </div>
 
                         <div className="pt-2">
