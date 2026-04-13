@@ -641,14 +641,58 @@ const App: React.FC = () => {
               
               {activeTab === 'dashboard' && (
                 <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Equipe Ativa</p>
-                      <p className="text-4xl font-black mt-1 text-slate-800">{data.employees.length}</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Equipe Total</p>
+                      <p className="text-3xl font-black mt-1 text-slate-800">{data.employees.length}</p>
                     </div>
-                    <div className="bg-indigo-600 p-8 rounded-3xl shadow-xl text-white">
-                      <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">Saldo Geral da Loja</p>
-                      <p className="text-3xl font-mono font-black mt-1">{formatMinutes(data.employees.reduce((acc, e) => acc + getCumulativeBalance(e.id), 0))}</p>
+                    {(() => {
+                      const cltEmps = data.employees.filter(e => !e.isHourly);
+                      const horistas = data.employees.filter(e => e.isHourly);
+                      
+                      const cltBalances = cltEmps.map(e => getCumulativeBalance(e.id));
+                      const posBalance = cltBalances.filter(b => b > 0).reduce((acc, b) => acc + b, 0);
+                      const negBalance = cltBalances.filter(b => b < 0).reduce((acc, b) => acc + b, 0);
+                      const horistaTotal = horistas.reduce((acc, e) => acc + getCumulativeBalance(e.id), 0);
+
+                      return (
+                        <>
+                          <div className="bg-emerald-50 p-6 rounded-3xl shadow-sm border border-emerald-100">
+                            <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Saldo Positivo (CLT)</p>
+                            <p className="text-2xl font-mono font-black mt-1 text-emerald-700">{formatMinutes(posBalance)}</p>
+                          </div>
+                          <div className="bg-rose-50 p-6 rounded-3xl shadow-sm border border-rose-100">
+                            <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest">Saldo Negativo (CLT)</p>
+                            <p className="text-2xl font-mono font-black mt-1 text-rose-700">{formatMinutes(negBalance)}</p>
+                          </div>
+                          <div className="bg-amber-50 p-6 rounded-3xl shadow-sm border border-amber-100">
+                            <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest">Total Horistas</p>
+                            <p className="text-2xl font-mono font-black mt-1 text-amber-700">{formatMinutes(horistaTotal)}</p>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  <div className="bg-indigo-600 p-8 rounded-[2.5rem] shadow-xl text-white relative overflow-hidden">
+                    <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-6">
+                      <div className="text-center md:text-left">
+                        <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest mb-1">Saldo Líquido da Loja (Banco de Horas)</p>
+                        <h3 className="text-5xl font-mono font-black">
+                          {formatMinutes(data.employees.filter(e => !e.isHourly).reduce((acc, e) => acc + getCumulativeBalance(e.id), 0))}
+                        </h3>
+                        <p className="text-[9px] text-indigo-300 mt-2 font-bold uppercase">* Soma apenas de funcionários CLT. Horistas são contabilizados separadamente.</p>
+                      </div>
+                      <div className="bg-white/10 p-6 rounded-3xl backdrop-blur-sm border border-white/10 w-full md:w-auto text-center">
+                        <p className="text-[10px] font-black text-white/60 uppercase mb-2">Resumo Financeiro</p>
+                        <div className="text-sm font-bold flex flex-col gap-1">
+                          <span className="flex justify-between gap-8"><span>CLT:</span> <span>{formatMinutes(data.employees.filter(e => !e.isHourly).reduce((acc, e) => acc + getCumulativeBalance(e.id), 0))}</span></span>
+                          <span className="flex justify-between gap-8"><span>Horistas:</span> <span>{formatMinutes(data.employees.filter(e => e.isHourly).reduce((acc, e) => acc + getCumulativeBalance(e.id), 0))}</span></span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="absolute -right-10 -bottom-10 opacity-10 rotate-12">
+                      <TrendingUp size={240}/>
                     </div>
                   </div>
                 </div>
