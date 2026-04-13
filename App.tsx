@@ -69,8 +69,10 @@ const App: React.FC = () => {
   const [justificationForm, setJustificationForm] = useState({
     employeeId: '',
     date: getLocalDateString(new Date()),
+    endDate: getLocalDateString(new Date()),
     type: 'MEDICAL' as EntryType,
-    note: ''
+    note: '',
+    isRange: false
   });
 
   const [reportFilter, setReportFilter] = useState({
@@ -259,17 +261,35 @@ const App: React.FC = () => {
     if (!supabase || !justificationForm.employeeId) return;
     setIsSaving(true);
     try {
-      const { error } = await supabase.from('timeBank').insert([{
-        employeeId: justificationForm.employeeId,
-        date: justificationForm.date,
-        minutes: 0, 
-        type: justificationForm.type,
-        note: justificationForm.note.trim() || 'Abono/Justificativa'
-      }]);
+      const entries = [];
+      if (justificationForm.isRange && justificationForm.endDate > justificationForm.date) {
+        let current = new Date(justificationForm.date + "T12:00:00");
+        const end = new Date(justificationForm.endDate + "T12:00:00");
+        while (current <= end) {
+          entries.push({
+            employeeId: justificationForm.employeeId,
+            date: getLocalDateString(current),
+            minutes: 0, 
+            type: justificationForm.type,
+            note: justificationForm.note.trim() || 'Abono/Justificativa'
+          });
+          current.setDate(current.getDate() + 1);
+        }
+      } else {
+        entries.push({
+          employeeId: justificationForm.employeeId,
+          date: justificationForm.date,
+          minutes: 0, 
+          type: justificationForm.type,
+          note: justificationForm.note.trim() || 'Abono/Justificativa'
+        });
+      }
+
+      const { error } = await supabase.from('timeBank').insert(entries);
       if (error) throw error;
-      setJustificationForm({ ...justificationForm, note: '' });
+      setJustificationForm({ ...justificationForm, note: '', isRange: false });
       await fetchData();
-      alert("Abono registrado!");
+      alert(entries.length > 1 ? `${entries.length} dias registrados com sucesso!` : "Abono registrado!");
     } catch (err: any) { alert("Erro: " + err.message); } finally { setIsSaving(false); }
   };
 
@@ -871,7 +891,24 @@ const App: React.FC = () => {
                         <option value="">Selecione Colaborador...</option>
                         {data.employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                       </select>
-                      <input type="date" value={justificationForm.date} onChange={e => setJustificationForm({...justificationForm, date: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                      <div className="flex items-center gap-2 mb-2 p-1">
+                        <input type="checkbox" id="isRange" checked={justificationForm.isRange} onChange={e => setJustificationForm({...justificationForm, isRange: e.target.checked})} className="w-4 h-4 text-indigo-600 rounded" />
+                        <label htmlFor="isRange" className="text-[10px] font-black text-slate-600 uppercase cursor-pointer">Lançar Período (Intervalo)</label>
+                      </div>
+
+                      <div className={`grid ${justificationForm.isRange ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
+                        <div className="space-y-1">
+                          {justificationForm.isRange && <label className="text-[8px] font-black text-slate-400 uppercase ml-2">Data Início</label>}
+                          <input type="date" value={justificationForm.date} onChange={e => setJustificationForm({...justificationForm, date: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                        </div>
+                        {justificationForm.isRange && (
+                          <div className="space-y-1">
+                            <label className="text-[8px] font-black text-slate-400 uppercase ml-2">Data Fim</label>
+                            <input type="date" value={justificationForm.endDate} onChange={e => setJustificationForm({...justificationForm, endDate: e.target.value})} className="w-full p-4 rounded-xl bg-slate-50 border border-slate-100 font-black text-xs"/>
+                          </div>
+                        )}
+                      </div>
+
                       <div className="grid grid-cols-2 gap-2">
                         {[
                           { id: 'MEDICAL', label: 'Atestado', icon: <HeartPulse size={14}/> },
