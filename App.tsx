@@ -174,7 +174,14 @@ const App: React.FC = () => {
     if (todayRec) {
       const workedSoFar = calculateWorkedMinutes(todayRec, currentTime);
       totalBalance += (workedSoFar - todayRec.expectedMinutes);
+    } else {
+      const isExcusedToday = todayManualEntries.some(e => ['MEDICAL', 'HOLIDAY', 'VACATION', 'OFF_DAY'].includes(e.type));
+      if (todayManualEntries.length > 0 && !isExcusedToday) {
+        const metaDoDiaHoje = getExpectedMinutesForDate(emp, currentTime);
+        totalBalance -= metaDoDiaHoje;
+      }
     }
+    
     todayManualEntries.forEach(ent => {
       if (['ADJUSTMENT', 'WORK_RETRO', 'BONUS'].includes(ent.type)) totalBalance += ent.minutes;
     });
