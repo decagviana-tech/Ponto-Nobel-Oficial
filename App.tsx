@@ -321,15 +321,21 @@ const App: React.FC = () => {
 
       empsToProcess.forEach(emp => {
         let currentD = new Date(startD);
-        const empStart = emp.startDate ? new Date(emp.startDate + "T12:00:00") : new Date(0);
+        let empStart = new Date(0);
+        if (emp.startDate) {
+          const parsed = new Date(emp.startDate + "T12:00:00");
+          if (!isNaN(parsed.getTime())) {
+            empStart = parsed;
+          }
+        }
         
         while (currentD <= endD) {
-          if (currentD >= empStart) {
-            const dateStr = getLocalDateString(currentD);
+          const dateStr = getLocalDateString(currentD);
+          const hasRecord = data.records.some(rx => rx.employeeId === emp.id && rx.date === dateStr);
+          const hasBank = data.timeBank.some(t => t.employeeId === emp.id && t.date === dateStr);
+          
+          if (currentD >= empStart || hasRecord || hasBank) {
             const expected = getExpectedMinutesForDate(emp, currentD);
-            const hasRecord = data.records.some(rx => rx.employeeId === emp.id && rx.date === dateStr);
-            const hasBank = data.timeBank.some(t => t.employeeId === emp.id && t.date === dateStr);
-            
             if (hasRecord || hasBank || expected > 0) {
                entriesList.push({ empId: emp.id, date: dateStr });
             }
@@ -339,7 +345,7 @@ const App: React.FC = () => {
       });
 
       if (entriesList.length === 0) {
-        alert("Nenhum dado encontrado para exportar nesse período!");
+        alert(`Nenhum dado encontrado para exportar nesse período!\nFiltros originais: ${reportFilter.startDate} até ${reportFilter.endDate}\nParseado: ${startD.toLocaleDateString()} até ${endD.toLocaleDateString()}`);
         return;
       }
 
