@@ -310,35 +310,61 @@ const App: React.FC = () => {
   };
 
   const handleExportAccountantReport = () => {
-    // Coletar todas as datas e funcionários relevantes (tanto de records quanto de timeBank)
-    const entriesMap = new Map<string, { empId: string, date: string }>();
+    const entriesList: { empId: string, date: string }[] = [];
+    const empsToProcess = reportFilter.employeeId === 'all' 
+      ? data.employees 
+      : data.employees.filter(e => e.id === reportFilter.employeeId);
 
-    data.records.forEach(r => {
-      const isDateInRange = r.date >= reportFilter.startDate && r.date <= reportFilter.endDate;
-      const isEmployeeMatch = reportFilter.employeeId === 'all' || r.employeeId === reportFilter.employeeId;
-      if (isDateInRange && isEmployeeMatch) {
-        entriesMap.set(`${r.employeeId}_${r.date}`, { empId: r.employeeId, date: r.date });
+    const startD = new Date(reportFilter.startDate + "T12:00:00");
+    const endD = new Date(reportFilter.endDate + "T12:00:00");
+
+    empsToProcess.forEach(emp => {
+      let currentD = new Date(startD);
+      // Ignora datas antes da admissão do funcionário para não gerar faltas falsas
+      const empStart = emp.startDate ? new Date(emp.startDate + "T12:00:00") : new Date(0);
+      
+      while (currentD <= endD) {
+        if (currentD >= empStart) {
+          const dateStr = getLocalDateString(currentD);
+          const expected = getExpectedMinutesForDate(emp, currentD);
+          const hasRecord = data.records.some(rx => rx.employeeId === emp.id && rx.date === dateStr);
+          const hasBank = data.timeBank.some(t => t.employeeId === emp.id && t.date === dateStr);
+          
+          if (hasRecord || hasBank || expected > 0) {
+             entriesList.push({ empId: emp.id, date: dateStr });
+          }
+        }
+        currentD.setDate(currentD.getDate() + 1);
       }
     });
 
-    data.timeBank.forEach(t => {
-      const isDateInRange = t.date >= reportFilter.startDate && t.date <= reportFilter.endDate;
-      const isEmployeeMatch = reportFilter.employeeId === 'all' || t.employeeId === reportFilter.employeeId;
-      if (isDateInRange && isEmployeeMatch) {
-        entriesMap.set(`${t.employeeId}_${t.date}`, { empId: t.employeeId, date: t.date });
-      }
-    });
-
-    // Converter para array e ordenar (nome asc, data desc)
-    const entriesList = Array.from(entriesMap.values()).sort((a, b) => {
+    // Converter para array e ordenar (nome asc, data asc)
+    entriesList.sort((a, b) => {
        const empA = data.employees.find(e => e.id === a.empId)?.name || '';
        const empB = data.employees.find(e => e.id === b.empId)?.name || '';
        if (empA > empB) return 1;
        if (empA < empB) return -1;
-       return a.date > b.date ? -1 : 1;
+       return a.date > b.date ? 1 : -1;
     });
 
-    const mapped = entriesList.map(entry => {
+    const finalReportData: any[] = [];
+    let currentEmpId = '';
+    let currentWeekKey = '';
+    let weekWorkedMins = 0;
+    let weekExpectedMins = 0;
+    let weekAdjustmentMins = 0;
+    let weekBalanceMins = 0;
+
+    const getWeekKey = (dStr: string) => {
+       const d = new Date(dStr + "T12:00:00");
+       const day = d.getDay();
+       const diffToMon = day === 0 ? -6 : 1 - day;
+       const mon = new Date(d); mon.setDate(d.getDate() + diffToMon);
+       const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+       return `${mon.toLocaleDateString('pt-BR')} a ${sun.toLocaleDateString('pt-BR')}`;
+    };
+
+    entriesList.forEach((entry, idx) => {
       const r = data.records.find(rx => rx.employeeId === entry.empId && rx.date === entry.date);
       const emp = data.employees.find(e => e.id === entry.empId);
       
@@ -372,7 +398,38 @@ const App: React.FC = () => {
       }
       dailyBalance += adjustmentMins;
 
-      return {
+      const weekKey = getWeekKey(entry.date);
+
+      if ((currentEmpId !== entry.empId || currentWeekKey !== weekKey) && currentEmpId !== '') {
+          finalReportData.push({
+             'Funcionário': '---',
+             'Data': `RESUMO: ${currentWeekKey}`,
+             'Entrada': '---',
+             'Início Almoço': '---',
+             'Retorno Almoço': '---',
+             'Início Lanche': '---',
+             'Retorno Lanche': '---',
+             'Saída Final': '---',
+             'Meta do Dia': formatMinutes(weekExpectedMins),
+             'Total Trabalhado': formatMinutes(weekWorkedMins),
+             'Justificativas / Abonos': '---',
+             'Horas de Ajuste': formatMinutes(weekAdjustmentMins),
+             'Saldo do Dia': formatMinutes(weekBalanceMins)
+          });
+          weekWorkedMins = 0;
+          weekExpectedMins = 0;
+          weekAdjustmentMins = 0;
+          weekBalanceMins = 0;
+      }
+
+      currentEmpId = entry.empId;
+      currentWeekKey = weekKey;
+      weekExpectedMins += expected;
+      weekWorkedMins += workedMins;
+      weekAdjustmentMins += adjustmentMins;
+      weekBalanceMins += dailyBalance;
+
+      finalReportData.push({
         'Funcionário': emp?.name || '---',
         'Data': new Date(entry.date + "T12:00:00").toLocaleDateString('pt-BR'),
         'Entrada': r ? formatTime(r.clockIn) : '---',
@@ -386,10 +443,28 @@ const App: React.FC = () => {
         'Justificativas / Abonos': notes.length > 0 ? notes.join(' | ') : '---',
         'Horas de Ajuste': adjustmentMins !== 0 ? formatMinutes(adjustmentMins) : (isAbscence ? 'Abonado/Neutro' : '---'),
         'Saldo do Dia': formatMinutes(dailyBalance)
-      };
+      });
+
+      if (idx === entriesList.length - 1) {
+          finalReportData.push({
+             'Funcionário': '---',
+             'Data': `RESUMO: ${currentWeekKey}`,
+             'Entrada': '---',
+             'Início Almoço': '---',
+             'Retorno Almoço': '---',
+             'Início Lanche': '---',
+             'Retorno Lanche': '---',
+             'Saída Final': '---',
+             'Meta do Dia': formatMinutes(weekExpectedMins),
+             'Total Trabalhado': formatMinutes(weekWorkedMins),
+             'Justificativas / Abonos': '---',
+             'Horas de Ajuste': formatMinutes(weekAdjustmentMins),
+             'Saldo do Dia': formatMinutes(weekBalanceMins)
+          });
+      }
     });
     
-    exportToCSV(mapped, 'Relatorio_Nobel_Completo');
+    exportToCSV(finalReportData, 'Relatorio_Nobel_Completo');
   };
 
   const filteredRecords = data.records.filter(r => {
