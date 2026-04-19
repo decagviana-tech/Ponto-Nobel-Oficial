@@ -310,161 +310,169 @@ const App: React.FC = () => {
   };
 
   const handleExportAccountantReport = () => {
-    const entriesList: { empId: string, date: string }[] = [];
-    const empsToProcess = reportFilter.employeeId === 'all' 
-      ? data.employees 
-      : data.employees.filter(e => e.id === reportFilter.employeeId);
+    try {
+      const entriesList: { empId: string, date: string }[] = [];
+      const empsToProcess = reportFilter.employeeId === 'all' 
+        ? data.employees 
+        : data.employees.filter(e => e.id === reportFilter.employeeId);
 
-    const startD = new Date(reportFilter.startDate + "T12:00:00");
-    const endD = new Date(reportFilter.endDate + "T12:00:00");
+      const startD = new Date(reportFilter.startDate + "T12:00:00");
+      const endD = new Date(reportFilter.endDate + "T12:00:00");
 
-    empsToProcess.forEach(emp => {
-      let currentD = new Date(startD);
-      // Ignora datas antes da admissão do funcionário para não gerar faltas falsas
-      const empStart = emp.startDate ? new Date(emp.startDate + "T12:00:00") : new Date(0);
-      
-      while (currentD <= endD) {
-        if (currentD >= empStart) {
-          const dateStr = getLocalDateString(currentD);
-          const expected = getExpectedMinutesForDate(emp, currentD);
-          const hasRecord = data.records.some(rx => rx.employeeId === emp.id && rx.date === dateStr);
-          const hasBank = data.timeBank.some(t => t.employeeId === emp.id && t.date === dateStr);
-          
-          if (hasRecord || hasBank || expected > 0) {
-             entriesList.push({ empId: emp.id, date: dateStr });
+      empsToProcess.forEach(emp => {
+        let currentD = new Date(startD);
+        const empStart = emp.startDate ? new Date(emp.startDate + "T12:00:00") : new Date(0);
+        
+        while (currentD <= endD) {
+          if (currentD >= empStart) {
+            const dateStr = getLocalDateString(currentD);
+            const expected = getExpectedMinutesForDate(emp, currentD);
+            const hasRecord = data.records.some(rx => rx.employeeId === emp.id && rx.date === dateStr);
+            const hasBank = data.timeBank.some(t => t.employeeId === emp.id && t.date === dateStr);
+            
+            if (hasRecord || hasBank || expected > 0) {
+               entriesList.push({ empId: emp.id, date: dateStr });
+            }
           }
+          currentD.setDate(currentD.getDate() + 1);
         }
-        currentD.setDate(currentD.getDate() + 1);
-      }
-    });
-
-    // Converter para array e ordenar (nome asc, data asc)
-    entriesList.sort((a, b) => {
-       const empA = data.employees.find(e => e.id === a.empId)?.name || '';
-       const empB = data.employees.find(e => e.id === b.empId)?.name || '';
-       if (empA > empB) return 1;
-       if (empA < empB) return -1;
-       return a.date > b.date ? 1 : -1;
-    });
-
-    const finalReportData: any[] = [];
-    let currentEmpId = '';
-    let currentWeekKey = '';
-    let weekWorkedMins = 0;
-    let weekExpectedMins = 0;
-    let weekAdjustmentMins = 0;
-    let weekBalanceMins = 0;
-
-    const getWeekKey = (dStr: string) => {
-       const d = new Date(dStr + "T12:00:00");
-       const day = d.getDay();
-       const diffToMon = day === 0 ? -6 : 1 - day;
-       const mon = new Date(d); mon.setDate(d.getDate() + diffToMon);
-       const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-       return `${mon.toLocaleDateString('pt-BR')} a ${sun.toLocaleDateString('pt-BR')}`;
-    };
-
-    entriesList.forEach((entry, idx) => {
-      const r = data.records.find(rx => rx.employeeId === entry.empId && rx.date === entry.date);
-      const emp = data.employees.find(e => e.id === entry.empId);
-      
-      const dayTimeBank = data.timeBank.filter(t => t.employeeId === entry.empId && t.date === entry.date);
-      const workEntry = dayTimeBank.find(t => t.type === 'WORK');
-      const otherEntries = dayTimeBank.filter(t => t.type !== 'WORK');
-      
-      const expected = r?.expectedMinutes ?? (emp ? getExpectedMinutesForDate(emp as any, new Date(entry.date + "T12:00:00")) : 0);
-      const workedMins = workEntry ? (workEntry.minutes + expected) : 0;
-      
-      let adjustmentMins = 0;
-      let notes: string[] = [];
-      let isAbscence = false;
-
-      otherEntries.forEach(t => {
-         adjustmentMins += t.minutes;
-         if (['MEDICAL', 'VACATION', 'HOLIDAY', 'OFF_DAY'].includes(t.type)) {
-           isAbscence = true;
-         }
-         const label = ENTRY_TYPE_LABELS[t.type as keyof typeof ENTRY_TYPE_LABELS] || t.type;
-         notes.push(`${label}${t.note && t.note !== 'Abono/Justificativa' && t.note !== 'Abono' ? ' (' + t.note + ')' : ''}`);
       });
 
-      let dailyBalance = 0;
-      if (workEntry) {
-         dailyBalance += workEntry.minutes;
-      } else {
-         if (expected > 0 && !isAbscence) {
-            dailyBalance -= expected;
-         }
-      }
-      dailyBalance += adjustmentMins;
-
-      const weekKey = getWeekKey(entry.date);
-
-      if ((currentEmpId !== entry.empId || currentWeekKey !== weekKey) && currentEmpId !== '') {
-          finalReportData.push({
-             'Funcionário': '---',
-             'Data': `RESUMO: ${currentWeekKey}`,
-             'Entrada': '---',
-             'Início Almoço': '---',
-             'Retorno Almoço': '---',
-             'Início Lanche': '---',
-             'Retorno Lanche': '---',
-             'Saída Final': '---',
-             'Meta do Dia': formatMinutes(weekExpectedMins),
-             'Total Trabalhado': formatMinutes(weekWorkedMins),
-             'Justificativas / Abonos': '---',
-             'Horas de Ajuste': formatMinutes(weekAdjustmentMins),
-             'Saldo do Dia': formatMinutes(weekBalanceMins)
-          });
-          weekWorkedMins = 0;
-          weekExpectedMins = 0;
-          weekAdjustmentMins = 0;
-          weekBalanceMins = 0;
+      if (entriesList.length === 0) {
+        alert("Nenhum dado encontrado para exportar nesse período!");
+        return;
       }
 
-      currentEmpId = entry.empId;
-      currentWeekKey = weekKey;
-      weekExpectedMins += expected;
-      weekWorkedMins += workedMins;
-      weekAdjustmentMins += adjustmentMins;
-      weekBalanceMins += dailyBalance;
-
-      finalReportData.push({
-        'Funcionário': emp?.name || '---',
-        'Data': new Date(entry.date + "T12:00:00").toLocaleDateString('pt-BR'),
-        'Entrada': r ? formatTime(r.clockIn) : '---',
-        'Início Almoço': r ? formatTime(r.lunchStart) : '---',
-        'Retorno Almoço': r ? formatTime(r.lunchEnd) : '---',
-        'Início Lanche': r ? formatTime(r.snackStart) : '---',
-        'Retorno Lanche': r ? formatTime(r.snackEnd) : '---',
-        'Saída Final': r ? formatTime(r.clockOut) : '---',
-        'Meta do Dia': formatMinutes(expected),
-        'Total Trabalhado': (r || workEntry) ? formatMinutes(workedMins) : '---',
-        'Justificativas / Abonos': notes.length > 0 ? notes.join(' | ') : '---',
-        'Horas de Ajuste': adjustmentMins !== 0 ? formatMinutes(adjustmentMins) : (isAbscence ? 'Abonado/Neutro' : '---'),
-        'Saldo do Dia': formatMinutes(dailyBalance)
+      entriesList.sort((a, b) => {
+         const empA = data.employees.find(e => e.id === a.empId)?.name || '';
+         const empB = data.employees.find(e => e.id === b.empId)?.name || '';
+         if (empA > empB) return 1;
+         if (empA < empB) return -1;
+         return a.date > b.date ? 1 : -1;
       });
 
-      if (idx === entriesList.length - 1) {
-          finalReportData.push({
-             'Funcionário': '---',
-             'Data': `RESUMO: ${currentWeekKey}`,
-             'Entrada': '---',
-             'Início Almoço': '---',
-             'Retorno Almoço': '---',
-             'Início Lanche': '---',
-             'Retorno Lanche': '---',
-             'Saída Final': '---',
-             'Meta do Dia': formatMinutes(weekExpectedMins),
-             'Total Trabalhado': formatMinutes(weekWorkedMins),
-             'Justificativas / Abonos': '---',
-             'Horas de Ajuste': formatMinutes(weekAdjustmentMins),
-             'Saldo do Dia': formatMinutes(weekBalanceMins)
-          });
-      }
-    });
-    
-    exportToCSV(finalReportData, 'Relatorio_Nobel_Completo');
+      const finalReportData: any[] = [];
+      let currentEmpId = '';
+      let currentWeekKey = '';
+      let weekWorkedMins = 0;
+      let weekExpectedMins = 0;
+      let weekAdjustmentMins = 0;
+      let weekBalanceMins = 0;
+
+      const getWeekKey = (dStr: string) => {
+         const d = new Date(dStr + "T12:00:00");
+         const day = d.getDay();
+         const diffToMon = day === 0 ? -6 : 1 - day;
+         const mon = new Date(d); mon.setDate(d.getDate() + diffToMon);
+         const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+         return `${mon.toLocaleDateString('pt-BR')} a ${sun.toLocaleDateString('pt-BR')}`;
+      };
+
+      entriesList.forEach((entry, idx) => {
+        const r = data.records.find(rx => rx.employeeId === entry.empId && rx.date === entry.date);
+        const emp = data.employees.find(e => e.id === entry.empId);
+        
+        const dayTimeBank = data.timeBank.filter(t => t.employeeId === entry.empId && t.date === entry.date);
+        const workEntry = dayTimeBank.find(t => t.type === 'WORK');
+        const otherEntries = dayTimeBank.filter(t => t.type !== 'WORK');
+        
+        const expected = r?.expectedMinutes ?? (emp ? getExpectedMinutesForDate(emp as any, new Date(entry.date + "T12:00:00")) : 0);
+        const workedMins = workEntry ? (workEntry.minutes + expected) : 0;
+        
+        let adjustmentMins = 0;
+        let notes: string[] = [];
+        let isAbscence = false;
+
+        otherEntries.forEach(t => {
+           adjustmentMins += t.minutes;
+           if (['MEDICAL', 'VACATION', 'HOLIDAY', 'OFF_DAY'].includes(t.type)) {
+             isAbscence = true;
+           }
+           const label = ENTRY_TYPE_LABELS[t.type as keyof typeof ENTRY_TYPE_LABELS] || t.type;
+           notes.push(`${label}${t.note && t.note !== 'Abono/Justificativa' && t.note !== 'Abono' ? ' (' + t.note + ')' : ''}`);
+        });
+
+        let dailyBalance = 0;
+        if (workEntry) {
+           dailyBalance += workEntry.minutes;
+        } else {
+           if (expected > 0 && !isAbscence) {
+              dailyBalance -= expected;
+           }
+        }
+        dailyBalance += adjustmentMins;
+
+        const weekKey = getWeekKey(entry.date);
+
+        if ((currentEmpId !== entry.empId || currentWeekKey !== weekKey) && currentEmpId !== '') {
+            finalReportData.push({
+               'Funcionário': '---',
+               'Data': `RESUMO: ${currentWeekKey}`,
+               'Entrada': '---',
+               'Início Almoço': '---',
+               'Retorno Almoço': '---',
+               'Início Lanche': '---',
+               'Retorno Lanche': '---',
+               'Saída Final': '---',
+               'Meta do Dia': formatMinutes(weekExpectedMins),
+               'Total Trabalhado': formatMinutes(weekWorkedMins),
+               'Justificativas / Abonos': '---',
+               'Horas de Ajuste': formatMinutes(weekAdjustmentMins),
+               'Saldo do Dia': formatMinutes(weekBalanceMins)
+            });
+            weekWorkedMins = 0;
+            weekExpectedMins = 0;
+            weekAdjustmentMins = 0;
+            weekBalanceMins = 0;
+        }
+
+        currentEmpId = entry.empId;
+        currentWeekKey = weekKey;
+        weekExpectedMins += expected;
+        weekWorkedMins += workedMins;
+        weekAdjustmentMins += adjustmentMins;
+        weekBalanceMins += dailyBalance;
+
+        finalReportData.push({
+          'Funcionário': emp?.name || '---',
+          'Data': new Date(entry.date + "T12:00:00").toLocaleDateString('pt-BR'),
+          'Entrada': r ? formatTime(r.clockIn) : '---',
+          'Início Almoço': r ? formatTime(r.lunchStart) : '---',
+          'Retorno Almoço': r ? formatTime(r.lunchEnd) : '---',
+          'Início Lanche': r ? formatTime(r.snackStart) : '---',
+          'Retorno Lanche': r ? formatTime(r.snackEnd) : '---',
+          'Saída Final': r ? formatTime(r.clockOut) : '---',
+          'Meta do Dia': formatMinutes(expected),
+          'Total Trabalhado': (r || workEntry) ? formatMinutes(workedMins) : '---',
+          'Justificativas / Abonos': notes.length > 0 ? notes.join(' | ') : '---',
+          'Horas de Ajuste': adjustmentMins !== 0 ? formatMinutes(adjustmentMins) : (isAbscence ? 'Abonado/Neutro' : '---'),
+          'Saldo do Dia': formatMinutes(dailyBalance)
+        });
+
+        if (idx === entriesList.length - 1) {
+            finalReportData.push({
+               'Funcionário': '---',
+               'Data': `RESUMO: ${currentWeekKey}`,
+               'Entrada': '---',
+               'Início Almoço': '---',
+               'Retorno Almoço': '---',
+               'Início Lanche': '---',
+               'Retorno Lanche': '---',
+               'Saída Final': '---',
+               'Meta do Dia': formatMinutes(weekExpectedMins),
+               'Total Trabalhado': formatMinutes(weekWorkedMins),
+               'Justificativas / Abonos': '---',
+               'Horas de Ajuste': formatMinutes(weekAdjustmentMins),
+               'Saldo do Dia': formatMinutes(weekBalanceMins)
+            });
+        }
+      });
+      
+      exportToCSV(finalReportData, 'Relatorio_Nobel_Completo');
+    } catch (err: any) {
+      alert("Erro ao exportar: " + err.message);
+      console.error(err);
+    }
   };
 
   const filteredRecords = data.records.filter(r => {
